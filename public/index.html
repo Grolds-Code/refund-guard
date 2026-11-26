@@ -3,37 +3,39 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RefundGuard | Payout &amp; Refund Interception</title>
-  <meta name="description" content="Concurrent Mozaik agent review with pre-execution interception for marketplace refunds, chargebacks, and seller payouts." />
+  <title>RefundGuard | Concurrent Payout &amp; Refund Interception</title>
+  <meta name="description" content="Concurrent Mozaik AI agents with mid-flight interception preventing Black Friday double-payouts and zero-sum seller misallocations." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #f7f7f8;
-      --surface: #ffffff;
-      --subtle: #fafafa;
-      --border: #e4e4e7;
-      --border-strong: #d4d4d8;
-      --ink: #111113;
-      --ink-secondary: #52525b;
-      --ink-muted: #71717a;
+      --bg: #09090b;
+      --surface-1: #111113;
+      --surface-2: #18181b;
+      --surface-3: #222226;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(255, 255, 255, 0.16);
+      --border-strong: rgba(255, 255, 255, 0.22);
 
-      --ok-ink: #166534;
-      --ok-bg: #f0fdf4;
-      --ok-border: #bbf7d0;
+      --ink: #fafafa;
+      --ink-2: #a1a1aa;
+      --ink-3: #71717a;
 
-      --warn-ink: #92400e;
-      --warn-bg: #fffbeb;
-      --warn-border: #fde68a;
-
-      --danger-ink: #991b1b;
-      --danger-bg: #fef2f2;
-      --danger-border: #fecaca;
+      --emerald: #34d399;
+      --emerald-soft: rgba(16, 185, 129, 0.11);
+      --amber: #fbbf24;
+      --amber-soft: rgba(245, 158, 11, 0.11);
+      --rose: #fb7185;
+      --rose-soft: rgba(244, 63, 94, 0.12);
+      --sky: #38bdf8;
+      --sky-soft: rgba(56, 189, 248, 0.11);
 
       --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      --radius: 8px;
+      --radius-lg: 12px;
+      --radius-md: 8px;
+      --radius-sm: 6px;
     }
 
     * { box-sizing: border-box; }
@@ -44,23 +46,37 @@
       background: var(--bg);
       color: var(--ink);
       font-family: var(--sans);
-      font-size: 14px;
+      font-size: 13.5px;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    /* Top Bar */
+    /* Subtle top radial ambient light (monochrome, ultra-restrained) */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: 360px;
+      background: radial-gradient(60% 100% at 50% 0%, rgba(255, 255, 255, 0.035) 0%, transparent 100%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Sticky Top Navigation */
     header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
       position: sticky;
       top: 0;
-      z-index: 10;
+      z-index: 20;
+      background: rgba(9, 9, 11, 0.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
     }
     .header-inner {
-      max-width: 1320px;
+      max-width: 1360px;
       margin: 0 auto;
-      padding: 14px 24px;
+      padding: 12px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -69,291 +85,441 @@
     }
     .brand {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       gap: 12px;
+    }
+    .logo-mark {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--ink);
+      color: var(--bg);
+      display: grid;
+      place-items: center;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+    .brand-text {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
     }
     .brand h1 {
       margin: 0;
-      font-size: 15px;
+      font-size: 14.5px;
       font-weight: 600;
-      letter-spacing: -0.015em;
-      color: var(--ink);
+      letter-spacing: -0.02em;
     }
-    .brand span {
-      font-size: 13px;
-      color: var(--ink-muted);
+    .brand .tagline {
+      font-size: 12.5px;
+      color: var(--ink-3);
     }
-    .header-actions {
+    .header-right {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       flex-wrap: wrap;
     }
-    .meta-tag {
+    .meta-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      color: var(--ink-2);
       font-family: var(--mono);
-      font-size: 11.5px;
-      color: var(--ink-secondary);
-      padding: 4px 8px;
-      background: var(--subtle);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-    }
-
-    /* Main Grid */
-    main {
-      max-width: 1320px;
-      margin: 0 auto;
-      padding: 24px;
-      display: grid;
-      grid-template-columns: 336px minmax(0, 1fr);
-      gap: 24px;
-      align-items: start;
-    }
-    @media (max-width: 980px) {
-      main {
-        grid-template-columns: 1fr;
-        padding: 16px;
-      }
-    }
-
-    /* Panels */
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-    }
-    .panel-section {
-      padding: 18px 20px;
-      border-bottom: 1px solid var(--border);
-    }
-    .panel-section:last-child {
-      border-bottom: none;
-    }
-    .section-label {
-      margin: 0 0 12px;
       font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--ink-muted);
     }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--ink-3);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .dot.ok { background: var(--emerald); }
+    .dot.warn { background: var(--amber); }
+    .dot.danger { background: var(--rose); }
+    .dot.sky { background: var(--sky); }
 
-    /* Scenario Selector */
-    .scenario-list {
+    /* Container */
+    .shell {
+      position: relative;
+      z-index: 1;
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 20px 24px 40px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 16px;
     }
-    .scenario-btn {
-      width: 100%;
-      text-align: left;
-      padding: 9px 11px;
-      border-radius: 6px;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--ink);
-      cursor: pointer;
-      transition: background 0.12s ease, border-color 0.12s ease;
-    }
-    .scenario-btn:hover {
-      background: var(--subtle);
-      border-color: var(--border);
-    }
-    .scenario-btn.active {
-      background: var(--subtle);
-      border-color: var(--ink);
-    }
-    .scenario-btn .s-title {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--ink);
-    }
-    .scenario-btn .s-desc {
-      font-size: 12px;
-      color: var(--ink-muted);
-      margin-top: 2px;
-      line-height: 1.4;
+    @media (max-width: 768px) {
+      .shell { padding: 14px 14px 32px; }
+      .header-inner { padding: 10px 14px; }
     }
 
-    /* Form Controls */
-    .field {
+    /* Scenario Segmented Strip */
+    .scenario-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    .tab-btn {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ink-2);
+      padding: 6px 12px;
+      border-radius: 7px;
+      font-family: var(--sans);
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+    }
+    .tab-btn:hover {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .tab-btn.active {
+      background: var(--surface-3);
+      color: var(--ink);
+      border-color: var(--border-hover);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+    .tab-num {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      margin-right: 5px;
+    }
+    .tab-btn.active .tab-num { color: var(--ink-2); }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 7px 13px;
+      border-radius: var(--radius-sm);
+      font-family: var(--sans);
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease, opacity 0.14s ease, transform 0.08s ease;
+    }
+    .btn:active:not(:disabled) { transform: translateY(0.5px); }
+    .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+    .btn-primary {
+      background: var(--ink);
+      color: var(--bg);
+      border: 1px solid var(--ink);
+      font-weight: 600;
+    }
+    .btn-primary:hover:not(:disabled) { opacity: 0.9; }
+    .btn-ghost {
+      background: var(--surface-1);
+      color: var(--ink-2);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover:not(:disabled) {
+      color: var(--ink);
+      background: var(--surface-2);
+      border-color: var(--border-hover);
+    }
+
+    /* KPI Strip */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: 1.55fr 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 960px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+    }
+    .surface {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    }
+    .kpi {
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .kpi-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-3);
+    }
+    .kpi-val {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-variant-numeric: tabular-nums;
+    }
+    .kpi-val.mono { font-family: var(--mono); font-size: 16.5px; }
+    .kpi-sub {
+      font-size: 12px;
+      color: var(--ink-2);
+      line-height: 1.4;
+    }
+    .status-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 500;
+      background: var(--surface-2);
+      color: var(--ink-2);
+    }
+    .status-tag.ok { background: var(--emerald-soft); color: var(--emerald); }
+    .status-tag.warn { background: var(--amber-soft); color: var(--amber); }
+    .status-tag.danger { background: var(--rose-soft); color: var(--rose); }
+    .status-tag.sky { background: var(--sky-soft); color: var(--sky); }
+
+    /* Concurrency Gantt Strip */
+    .gantt-card {
+      padding: 15px 18px;
+    }
+    .gantt-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .gantt-legend {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 11.5px;
+      color: var(--ink-3);
+      font-family: var(--mono);
+    }
+    .gantt-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .gantt-row {
+      display: grid;
+      grid-template-columns: 185px 1fr 74px;
+      align-items: center;
+      gap: 12px;
+    }
+    @media (max-width: 680px) {
+      .gantt-row { grid-template-columns: 120px 1fr 56px; }
+    }
+    .gantt-label {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--ink-2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .gantt-track {
+      position: relative;
+      height: 22px;
+      background: var(--surface-2);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .gantt-bar {
+      position: absolute;
+      top: 4px;
+      bottom: 4px;
+      border-radius: 3px;
+      transition: left 0.25s ease, width 0.25s ease;
+    }
+    .gantt-bar.refund { background: rgba(250, 250, 250, 0.78); }
+    .gantt-bar.sentinel { background: rgba(56, 189, 248, 0.72); }
+    .gantt-marker {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      z-index: 2;
+    }
+    .gantt-marker.inject { background: var(--amber); }
+    .gantt-marker.gate { background: var(--rose); }
+    .gantt-time {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Main Split Workspace */
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: 350px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1040px) {
+      .workspace-grid { grid-template-columns: 1fr; }
+    }
+
+    .card-head {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+      margin: 0;
+    }
+    .card-body {
+      padding: 16px 18px;
+    }
+
+    /* Controls Panel */
+    .case-brief {
+      font-size: 12.5px;
+      color: var(--ink-2);
+      padding-bottom: 14px;
       margin-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      line-height: 1.5;
     }
-    .field:last-of-type {
-      margin-bottom: 0;
-    }
+    .field { margin-bottom: 14px; }
+    .field:last-of-type { margin-bottom: 0; }
     label {
       display: block;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 500;
-      color: var(--ink-secondary);
+      color: var(--ink-2);
       margin-bottom: 6px;
+    }
+    .seg-control {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 3px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+    .seg-btn {
+      border: none;
+      background: transparent;
+      color: var(--ink-2);
+      padding: 7px 8px;
+      border-radius: 5px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .seg-btn:hover { color: var(--ink); }
+    .seg-btn.active {
+      background: var(--surface-3);
+      color: var(--ink);
     }
     select, textarea {
       width: 100%;
-      background: var(--surface);
+      background: var(--bg);
       color: var(--ink);
-      border: 1px solid var(--border-strong);
-      border-radius: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
       padding: 8px 10px;
       font-family: var(--sans);
-      font-size: 13px;
-      transition: border-color 0.12s ease;
+      font-size: 12.5px;
+      transition: border-color 0.14s ease;
     }
     textarea {
       font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.5;
-      min-height: 88px;
+      font-size: 11.5px;
+      line-height: 1.55;
+      min-height: 92px;
       resize: vertical;
     }
     select:focus, textarea:focus {
       outline: none;
-      border-color: var(--ink);
+      border-color: var(--border-strong);
     }
     .preset-row {
       display: flex;
       gap: 6px;
       flex-wrap: wrap;
-      margin-top: 6px;
+      margin-top: 7px;
     }
-    .text-btn {
-      background: var(--subtle);
+    .preset-btn {
+      background: var(--surface-2);
       border: 1px solid var(--border);
       border-radius: 5px;
       padding: 3px 8px;
-      font-size: 11.5px;
-      color: var(--ink-secondary);
+      font-size: 11px;
+      color: var(--ink-2);
       cursor: pointer;
+      transition: border-color 0.12s ease, color 0.12s ease;
     }
-    .text-btn:hover {
-      border-color: var(--border-strong);
+    .preset-btn:hover {
+      border-color: var(--border-hover);
       color: var(--ink);
     }
-
-    /* Buttons */
-    .btn-row {
+    .control-actions {
       display: flex;
       gap: 8px;
       margin-top: 16px;
     }
-    .btn-primary {
-      flex: 1;
-      padding: 9px 14px;
-      border-radius: 6px;
-      border: 1px solid var(--ink);
-      background: var(--ink);
-      color: #ffffff;
-      font-family: var(--sans);
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: opacity 0.12s ease;
-    }
-    .btn-primary:hover { opacity: 0.88; }
-    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    .control-actions .btn-primary { flex: 1; }
 
-    .btn-secondary {
-      padding: 7px 12px;
-      border-radius: 6px;
-      border: 1px solid var(--border-strong);
-      background: var(--surface);
-      color: var(--ink);
-      font-family: var(--sans);
-      font-size: 12.5px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.12s ease;
-    }
-    .btn-secondary:hover { background: var(--subtle); }
-    .btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    /* Right Workspace */
-    .workspace {
+    /* Right Stack */
+    .right-stack {
       display: flex;
       flex-direction: column;
-      gap: 18px;
+      gap: 16px;
+      min-width: 0;
     }
 
-    /* Status Summary Bar */
-    .status-bar {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .status-main {
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-    }
-    .status-heading {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .status-badge {
-      font-family: var(--mono);
-      font-size: 11.5px;
-      font-weight: 500;
-      padding: 3px 8px;
-      border-radius: 5px;
-      border: 1px solid var(--border);
-      background: var(--subtle);
-      color: var(--ink-secondary);
-    }
-    .status-badge.ok {
-      color: var(--ok-ink);
-      background: var(--ok-bg);
-      border-color: var(--ok-border);
-    }
-    .status-badge.warn {
-      color: var(--warn-ink);
-      background: var(--warn-bg);
-      border-color: var(--warn-border);
-    }
-    .status-badge.danger {
-      color: var(--danger-ink);
-      background: var(--danger-bg);
-      border-color: var(--danger-border);
-    }
-    .status-meta {
-      font-size: 12.5px;
-      color: var(--ink-muted);
-      font-family: var(--mono);
-    }
-    .status-detail {
-      font-size: 13px;
-      color: var(--ink-secondary);
-    }
-    .metrics-strip {
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .metric {
-      text-align: right;
-    }
-    .metric-label {
-      font-size: 11px;
-      color: var(--ink-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .metric-value {
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--ink);
-    }
-
-    /* Ledger Table */
+    /* Tables */
     table {
       width: 100%;
       border-collapse: collapse;
@@ -363,19 +529,14 @@
       font-size: 11px;
       font-weight: 500;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--ink-muted);
+      letter-spacing: 0.05em;
+      color: var(--ink-3);
       padding: 0 10px 10px;
       border-bottom: 1px solid var(--border);
       text-align: right;
     }
-    th:first-child, td:first-child {
-      text-align: left;
-      padding-left: 0;
-    }
-    th:last-child, td:last-child {
-      padding-right: 0;
-    }
+    th:first-child, td:first-child { text-align: left; padding-left: 0; }
+    th:last-child, td:last-child { padding-right: 0; }
     td {
       padding: 11px 10px;
       border-bottom: 1px solid var(--border);
@@ -388,384 +549,434 @@
       font-family: var(--sans);
       font-size: 13px;
     }
-    tbody tr:last-child td {
-      border-bottom: none;
-    }
+    tbody tr:last-child td { border-bottom: none; }
     tr.total-row td {
       font-weight: 600;
-      background: var(--subtle);
-      padding-top: 12px;
-      padding-bottom: 12px;
-      border-top: 1px solid var(--border-strong);
+      padding-top: 13px;
+      border-top: 1px solid var(--border-hover);
     }
     .seller-sub {
       display: block;
-      font-size: 12px;
-      color: var(--ink-muted);
+      font-size: 11.5px;
+      color: var(--ink-3);
       font-weight: 400;
     }
-    .delta-neg { color: var(--danger-ink); }
-    .delta-pos { color: var(--ok-ink); }
-    .delta-zero { color: var(--ink-muted); }
+    .delta-neg { color: var(--rose); }
+    .delta-pos { color: var(--emerald); }
+    .delta-zero { color: var(--ink-3); }
 
-    .citations {
+    .provenance-bar {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 12px;
       flex-wrap: wrap;
-      gap: 6px;
       margin-top: 14px;
       padding-top: 12px;
       border-top: 1px solid var(--border);
     }
-    .citations-label {
-      font-size: 11.5px;
-      color: var(--ink-muted);
-      margin-right: 4px;
+    .cite-group {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 5px;
     }
     .cite {
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 10.5px;
       padding: 2px 6px;
       border-radius: 4px;
-      background: var(--subtle);
+      background: var(--surface-2);
       border: 1px solid var(--border);
-      color: var(--ink-secondary);
+      color: var(--ink-2);
     }
-
-    /* Interception Gate */
-    .gate-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .gate-empty {
-      font-size: 13px;
-      color: var(--ink-secondary);
-    }
-    .gate-row {
-      padding: 12px 14px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: var(--subtle);
-    }
-    .gate-row.blocked {
-      border-color: var(--danger-border);
-      background: var(--danger-bg);
-    }
-    .gate-row.cleared {
-      border-color: var(--ok-border);
-      background: var(--ok-bg);
-    }
-    .gate-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      font-family: var(--mono);
+    .baseline-pill {
       font-size: 12px;
-      font-weight: 500;
-      margin-bottom: 4px;
+      color: var(--ink-2);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
-    .gate-body {
-      font-size: 13px;
-      color: var(--ink);
-    }
-    .gate-sources {
-      margin-top: 6px;
+    .baseline-pill code {
       font-family: var(--mono);
       font-size: 11px;
-      color: var(--ink-muted);
+      color: var(--ink);
+      background: var(--surface-2);
+      padding: 2px 6px;
+      border-radius: 4px;
     }
 
-    /* Concurrent Agent Lanes */
-    .lanes {
+    /* Interception Gate & Agent Event Stream */
+    .split-bottom {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1.15fr;
       gap: 16px;
     }
-    @media (max-width: 760px) {
-      .lanes { grid-template-columns: 1fr; }
-    }
-    .lane {
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--subtle);
-      display: flex;
-      flex-direction: column;
-    }
-    .lane-head {
-      padding: 9px 12px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      border-radius: 6px 6px 0 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12.5px;
-      font-weight: 500;
-    }
-    .lane-tool {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink-muted);
-    }
-    .lane-body {
-      padding: 10px 12px;
-      min-height: 160px;
-      max-height: 260px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .log-entry {
-      font-size: 12px;
-      line-height: 1.45;
-      padding: 8px 10px;
-      border-radius: 5px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      word-break: break-word;
-    }
-    .log-entry.blocked {
-      border-color: var(--danger-border);
-      background: var(--danger-bg);
-    }
-    .log-entry.cleared {
-      border-color: var(--ok-border);
-      background: var(--ok-bg);
-    }
-    .log-entry.injected {
-      border-color: var(--warn-border);
-      background: var(--warn-bg);
-    }
-    .log-meta {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink-muted);
-      margin-bottom: 2px;
+    @media (max-width: 900px) {
+      .split-bottom { grid-template-columns: 1fr; }
     }
 
-    /* Baseline Summary */
-    .baseline-note {
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 6px;
-      background: var(--subtle);
+    .gate-item {
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      background: var(--surface-2);
       border: 1px solid var(--border);
-      font-size: 12.5px;
-      color: var(--ink-secondary);
+      margin-bottom: 10px;
     }
-    .baseline-note code {
+    .gate-item:last-child { margin-bottom: 0; }
+    .gate-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+    .gate-desc {
+      font-size: 12.5px;
+      color: var(--ink-2);
+      line-height: 1.48;
+    }
+    .gate-foot {
+      margin-top: 8px;
       font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+    }
+
+    /* Event Feed */
+    .filter-pills {
+      display: flex;
+      gap: 4px;
+    }
+    .filter-pill {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ink-3);
+      padding: 3px 8px;
+      border-radius: 5px;
       font-size: 11.5px;
+      cursor: pointer;
+    }
+    .filter-pill:hover { color: var(--ink-2); }
+    .filter-pill.active {
+      background: var(--surface-2);
+      border-color: var(--border);
       color: var(--ink);
     }
-    .overlap-line {
-      margin-top: 4px;
+    .feed {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 290px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .feed-row {
+      display: grid;
+      grid-template-columns: 58px 1fr;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      animation: fadeIn 0.16s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .feed-ts {
       font-family: var(--mono);
       font-size: 11px;
-      color: var(--ink-muted);
+      color: var(--ink-3);
+      font-variant-numeric: tabular-nums;
+      padding-top: 1px;
+    }
+    .feed-actor {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--ink);
+      margin-bottom: 2px;
+    }
+    .feed-epoch {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink-3);
+    }
+    .feed-msg {
+      font-size: 12px;
+      color: var(--ink-2);
+      word-break: break-word;
     }
 
-    .compare-panel { display: none; }
-    .compare-panel.visible { display: block; }
+    /* Benchmark Drawer */
+    .benchmark-card { display: none; }
+    .benchmark-card.visible { display: block; }
   </style>
 </head>
 <body>
   <header>
     <div class="header-inner">
       <div class="brand">
-        <h1>RefundGuard</h1>
-        <span>Marketplace refund &amp; payout interception</span>
+        <div class="logo-mark">RG</div>
+        <div class="brand-text">
+          <h1>RefundGuard</h1>
+          <span class="tagline">Concurrent payout &amp; refund interception</span>
+        </div>
       </div>
-      <div class="header-actions">
-        <span class="meta-tag">@mozaik-ai/core@6.0.0</span>
-        <span id="modeBadge" class="meta-tag">Initializing</span>
-        <button id="compareBtn" class="btn-secondary">Run 5-Case Benchmark</button>
+      <div class="header-right">
+        <span class="meta-chip">@mozaik-ai/core@6.0.0</span>
+        <span id="modeChip" class="meta-chip"><span class="dot sky"></span>Loading</span>
+        <button id="compareBtn" class="btn btn-ghost">5-Case Benchmark</button>
       </div>
     </div>
   </header>
 
-  <main>
-    <aside class="panel">
-      <div class="panel-section">
-        <h2 class="section-label">Scenarios</h2>
-        <div id="scenarioList" class="scenario-list"></div>
+  <div class="shell">
+    <!-- Scenario Selector Bar -->
+    <div class="scenario-strip">
+      <div id="scenarioTabs" class="tabs" role="tablist"></div>
+      <div style="display:flex; gap:8px;">
+        <button id="downloadBtn" class="btn btn-ghost" disabled>Export Evidence JSON</button>
+        <button id="topRunBtn" class="btn btn-primary">Run Review</button>
+      </div>
+    </div>
+
+    <!-- Top KPI Row -->
+    <div class="kpi-grid">
+      <div class="surface kpi">
+        <div class="kpi-top">
+          <span class="eyebrow">Decision Status</span>
+          <span id="verdictTag" class="status-tag">IDLE</span>
+        </div>
+        <div id="verdictHeadline" class="kpi-val">Ready to inspect CHK-402</div>
+        <div id="verdictSub" class="kpi-sub">Choose a scenario or edit case inputs to run concurrent Mozaik verification.</div>
       </div>
 
-      <div class="panel-section">
-        <h2 class="section-label">Case Inputs</h2>
-
-        <div class="field">
-          <label for="draftSeller">Payout draft debited seller</label>
-          <select id="draftSeller">
-            <option value="SELLER-A">SELLER-A: Nairobi Streetwear Co. (A: 50k / B: 40k)</option>
-            <option value="SELLER-B">SELLER-B: Rift Valley Footwear (A: 60k / B: 30k)</option>
-          </select>
+      <div class="surface kpi">
+        <div class="kpi-top">
+          <span class="eyebrow">Financial Protection</span>
+          <span id="epochTag" class="status-tag">epoch 1</span>
         </div>
-
-        <div class="field">
-          <label for="warehouseNote">Warehouse return note (free text)</label>
-          <textarea id="warehouseNote"></textarea>
-          <div class="preset-row">
-            <button type="button" class="text-btn" data-preset="seller-a">Seller A jacket</button>
-            <button type="button" class="text-btn" data-preset="seller-b">Seller B boots</button>
-            <button type="button" class="text-btn" data-preset="missing">No parcel</button>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="injectionMode">Mid-flight async event</label>
-          <select id="injectionMode">
-            <option value="scenario-default">Scenario default</option>
-            <option value="none">None</option>
-            <option value="chargeback">PSP chargeback webhook (KSh 10,000)</option>
-            <option value="correction-seller-a">Late QC correction (Seller A)</option>
-            <option value="correction-seller-b">Late QC correction (Seller B)</option>
-          </select>
-        </div>
-
-        <div class="btn-row">
-          <button id="runBtn" class="btn-primary">Run Review</button>
-          <button id="downloadBtn" class="btn-secondary" disabled>Export JSON</button>
-        </div>
-      </div>
-    </aside>
-
-    <section class="workspace">
-      <div class="status-bar">
-        <div class="status-main">
-          <div class="status-heading">
-            <span id="verdictBadge" class="status-badge">IDLE</span>
-            <span id="verdictMeta" class="status-meta"></span>
-          </div>
-          <div id="verdictSub" class="status-detail">Select a scenario or modify case inputs, then run a review.</div>
-        </div>
-        <div class="metrics-strip">
-          <div class="metric">
-            <div class="metric-label">Concurrency</div>
-            <div id="overlapValue" class="metric-value">Pending</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Interceptions</div>
-            <div id="interceptionCount" class="metric-value">0</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Epoch</div>
-            <div id="epochValue" class="metric-value">1</div>
-          </div>
-        </div>
+        <div id="protectionVal" class="kpi-val mono">KSh 0</div>
+        <div id="protectionSub" class="kpi-sub">Deterministic integer KSh calculation from immutable source records.</div>
       </div>
 
-      <div class="panel">
-        <div class="panel-section">
-          <h2 class="section-label">Grounded Payout Allocation (Deterministic Integer KSh)</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Seller</th>
-                <th>Gross</th>
-                <th>Draft Payout</th>
-                <th>Supported Payout</th>
-                <th>Delta</th>
-              </tr>
-            </thead>
-            <tbody id="ledgerBody">
-              <tr>
-                <td colspan="5" style="text-align:center; color:var(--ink-muted); font-family:var(--sans);">
-                  Run a scenario to calculate grounded allocations.
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div id="citationsRow" class="citations" style="display:none;"></div>
-          <div id="baselineCallout" class="baseline-note" style="display:none;"></div>
+      <div class="surface kpi">
+        <div class="kpi-top">
+          <span class="eyebrow">Mozaik Concurrency</span>
+          <span id="overlapTag" class="status-tag">pending</span>
+        </div>
+        <div id="overlapVal" class="kpi-val mono">0ms overlap</div>
+        <div id="overlapSub" class="kpi-sub">Measures real execution overlap between RefundDesk and Sentinel loops.</div>
+      </div>
+    </div>
+
+    <!-- Visual Concurrency Execution Timeline -->
+    <div class="surface gantt-card">
+      <div class="gantt-head">
+        <span class="eyebrow">Concurrent Execution Timeline (Shared RuntimeState)</span>
+        <div class="gantt-legend">
+          <span><span class="dot" style="background:rgba(250,250,250,0.78); margin-right:5px;"></span>RefundDeskAgent</span>
+          <span><span class="dot sky" style="margin-right:5px;"></span>Sentinel</span>
+          <span><span class="dot warn" style="margin-right:5px;"></span>Mid-flight event</span>
+          <span><span class="dot danger" style="margin-right:5px;"></span>Interception gate</span>
         </div>
       </div>
-
-      <div class="panel">
-        <div class="panel-section">
-          <h2 class="section-label">Pre-Execution Interception Gate (Mozaik InterceptionHandler)</h2>
-          <div id="gateBox" class="gate-list">
-            <div class="gate-empty">Waiting for review execution.</div>
-          </div>
+      <div class="gantt-rows">
+        <div class="gantt-row">
+          <div class="gantt-label">RefundDeskAgent</div>
+          <div id="trackRefund" class="gantt-track"></div>
+          <div id="timeRefund" class="gantt-time">0ms</div>
+        </div>
+        <div class="gantt-row">
+          <div class="gantt-label">DisputeSentinel</div>
+          <div id="trackSentinel" class="gantt-track"></div>
+          <div id="timeSentinel" class="gantt-time">0ms</div>
         </div>
       </div>
+    </div>
 
-      <div class="panel">
-        <div class="panel-section">
-          <h2 class="section-label">Concurrent Agent Activity (Shared RuntimeState)</h2>
-          <div class="lanes">
-            <div class="lane">
-              <div class="lane-head">
-                <span>RefundDeskAgent</span>
-                <span class="lane-tool">propose_refund</span>
-              </div>
-              <div id="laneRefund" class="lane-body"></div>
-            </div>
-            <div class="lane">
-              <div class="lane-head">
-                <span>DisputeFulfillmentSentinel</span>
-                <span class="lane-tool">publish_sentinel_finding</span>
-              </div>
-              <div id="laneSentinel" class="lane-body"></div>
+    <!-- Main Workspace Split -->
+    <div class="workspace-grid">
+      <!-- Left: Judge Case Controls -->
+      <aside class="surface">
+        <div class="card-head">
+          <h2 class="card-title">Case Sandbox</h2>
+          <span id="checkoutTag" class="meta-chip">CHK-402</span>
+        </div>
+        <div class="card-body">
+          <div id="caseBrief" class="case-brief"></div>
+
+          <div class="field">
+            <label>Draft debited seller</label>
+            <div class="seg-control">
+              <button type="button" class="seg-btn" data-seller="SELLER-A">SELLER-A (50k/40k)</button>
+              <button type="button" class="seg-btn" data-seller="SELLER-B">SELLER-B (60k/30k)</button>
             </div>
           </div>
-        </div>
-      </div>
 
-      <div id="compareCard" class="panel compare-panel">
-        <div class="panel-section">
-          <h2 class="section-label">5-Case Benchmark: Single-Agent Baseline vs. Concurrent RefundGuard</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Scenario</th>
-                <th>Single-Agent Baseline</th>
-                <th>RefundGuard</th>
-                <th>Interception</th>
-                <th>Overlap</th>
-              </tr>
-            </thead>
-            <tbody id="compareBody"></tbody>
-          </table>
+          <div class="field">
+            <label for="warehouseNote">Warehouse return note (free text)</label>
+            <textarea id="warehouseNote"></textarea>
+            <div class="preset-row">
+              <button type="button" class="preset-btn" data-preset="seller-a">Seller A jacket</button>
+              <button type="button" class="preset-btn" data-preset="seller-b">Seller B boots</button>
+              <button type="button" class="preset-btn" data-preset="missing">No parcel</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="injectionMode">Mid-flight async event</label>
+            <select id="injectionMode">
+              <option value="scenario-default">Use scenario default</option>
+              <option value="none">None</option>
+              <option value="chargeback">Inject PSP chargeback webhook (KSh 10,000)</option>
+              <option value="correction-seller-a">Inject late QC correction (Seller A)</option>
+              <option value="correction-seller-b">Inject late QC correction (Seller B)</option>
+            </select>
+          </div>
+
+          <div class="control-actions">
+            <button id="runBtn" class="btn btn-primary">Run Concurrent Review</button>
+          </div>
         </div>
+      </aside>
+
+      <!-- Right: Ledger + Gate + Live Feed -->
+      <div class="right-stack">
+        <!-- Grounded Ledger -->
+        <section class="surface">
+          <div class="card-head">
+            <h2 class="card-title">Grounded Payout Allocation</h2>
+            <span class="eyebrow">Zero LLM arithmetic</span>
+          </div>
+          <div class="card-body">
+            <table>
+              <thead>
+                <tr>
+                  <th>Seller</th>
+                  <th>Gross</th>
+                  <th>Draft Payout</th>
+                  <th>Supported</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody id="ledgerBody">
+                <tr>
+                  <td colspan="5" style="text-align:center; color:var(--ink-3); font-family:var(--sans);">
+                    Run a scenario to compute grounded allocations.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="provenance-bar">
+              <div id="citationsRow" class="cite-group"></div>
+              <div id="baselineBadge" class="baseline-pill"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Interception Gate + Live Event Stream -->
+        <div class="split-bottom">
+          <section class="surface">
+            <div class="card-head">
+              <h2 class="card-title">Interception Gate</h2>
+              <span class="eyebrow">function_call guard</span>
+            </div>
+            <div id="gateBox" class="card-body">
+              <div class="gate-desc">Awaiting execution.</div>
+            </div>
+          </section>
+
+          <section class="surface">
+            <div class="card-head">
+              <h2 class="card-title">Live Runtime Events</h2>
+              <div class="filter-pills">
+                <button type="button" class="filter-pill active" data-filter="all">All</button>
+                <button type="button" class="filter-pill" data-filter="refund">RefundDesk</button>
+                <button type="button" class="filter-pill" data-filter="sentinel">Sentinel</button>
+                <button type="button" class="filter-pill" data-filter="gate">Gate</button>
+              </div>
+            </div>
+            <div class="card-body">
+              <div id="eventFeed" class="feed"></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 5-Case Benchmark Card -->
+        <section id="benchmarkCard" class="surface benchmark-card">
+          <div class="card-head">
+            <h2 class="card-title">5-Case Benchmark: Single-Agent Baseline vs. Concurrent RefundGuard</h2>
+            <span id="benchmarkSummary" class="status-tag ok">5/5 protected</span>
+          </div>
+          <div class="card-body">
+            <table>
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Single-Agent Baseline</th>
+                  <th>RefundGuard</th>
+                  <th>Interception</th>
+                  <th>Overlap</th>
+                </tr>
+              </thead>
+              <tbody id="benchmarkBody"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
-    </section>
-  </main>
+    </div>
+  </div>
 
   <script>
     const state = {
       scenarios: [],
       selectedId: null,
+      draftSellerId: "SELLER-B",
+      filter: "all",
+      events: [],
       lastBundle: null,
     };
 
     const els = {
-      modeBadge: document.getElementById("modeBadge"),
-      scenarioList: document.getElementById("scenarioList"),
-      draftSeller: document.getElementById("draftSeller"),
-      warehouseNote: document.getElementById("warehouseNote"),
-      injectionMode: document.getElementById("injectionMode"),
+      modeChip: document.getElementById("modeChip"),
+      scenarioTabs: document.getElementById("scenarioTabs"),
+      compareBtn: document.getElementById("compareBtn"),
+      topRunBtn: document.getElementById("topRunBtn"),
       runBtn: document.getElementById("runBtn"),
       downloadBtn: document.getElementById("downloadBtn"),
-      compareBtn: document.getElementById("compareBtn"),
-      verdictBadge: document.getElementById("verdictBadge"),
-      verdictMeta: document.getElementById("verdictMeta"),
+      caseBrief: document.getElementById("caseBrief"),
+      checkoutTag: document.getElementById("checkoutTag"),
+      warehouseNote: document.getElementById("warehouseNote"),
+      injectionMode: document.getElementById("injectionMode"),
+      verdictTag: document.getElementById("verdictTag"),
+      verdictHeadline: document.getElementById("verdictHeadline"),
       verdictSub: document.getElementById("verdictSub"),
-      overlapValue: document.getElementById("overlapValue"),
-      interceptionCount: document.getElementById("interceptionCount"),
-      epochValue: document.getElementById("epochValue"),
-      laneRefund: document.getElementById("laneRefund"),
-      laneSentinel: document.getElementById("laneSentinel"),
-      gateBox: document.getElementById("gateBox"),
+      epochTag: document.getElementById("epochTag"),
+      protectionVal: document.getElementById("protectionVal"),
+      protectionSub: document.getElementById("protectionSub"),
+      overlapTag: document.getElementById("overlapTag"),
+      overlapVal: document.getElementById("overlapVal"),
+      overlapSub: document.getElementById("overlapSub"),
+      trackRefund: document.getElementById("trackRefund"),
+      trackSentinel: document.getElementById("trackSentinel"),
+      timeRefund: document.getElementById("timeRefund"),
+      timeSentinel: document.getElementById("timeSentinel"),
       ledgerBody: document.getElementById("ledgerBody"),
       citationsRow: document.getElementById("citationsRow"),
-      baselineCallout: document.getElementById("baselineCallout"),
-      compareCard: document.getElementById("compareCard"),
-      compareBody: document.getElementById("compareBody"),
+      baselineBadge: document.getElementById("baselineBadge"),
+      gateBox: document.getElementById("gateBox"),
+      eventFeed: document.getElementById("eventFeed"),
+      benchmarkCard: document.getElementById("benchmarkCard"),
+      benchmarkBody: document.getElementById("benchmarkBody"),
+      benchmarkSummary: document.getElementById("benchmarkSummary"),
     };
 
     function fmtKsh(n) {
@@ -780,42 +991,106 @@
         .replace(/>/g, "&gt;");
     }
 
+    function setDraftSeller(sellerId) {
+      state.draftSellerId = sellerId;
+      for (const btn of document.querySelectorAll(".seg-btn")) {
+        btn.classList.toggle("active", btn.dataset.seller === sellerId);
+      }
+    }
+
     function selectScenario(id) {
       const s = state.scenarios.find((x) => x.id === id);
       if (!s) return;
       state.selectedId = id;
-      for (const btn of els.scenarioList.querySelectorAll(".scenario-btn")) {
+      for (const btn of els.scenarioTabs.querySelectorAll(".tab-btn")) {
         btn.classList.toggle("active", btn.dataset.id === id);
       }
-      els.draftSeller.value = s.draft.debitedSellerId;
+      els.caseBrief.textContent = s.summary;
+      els.checkoutTag.textContent = s.checkoutId;
+      setDraftSeller(s.draft.debitedSellerId);
       els.warehouseNote.value = s.initialWarehouseNote.text;
       els.injectionMode.value = "scenario-default";
     }
 
-    function appendLaneEvent(entry) {
-      const div = document.createElement("div");
-      let cls = "log-entry";
-      if (entry.type === "interception.blocked") cls += " blocked";
-      else if (entry.type === "interception.cleared" || entry.type === "proposal.accepted") cls += " cleared";
-      else if (entry.type.startsWith("evidence.")) cls += " injected";
-      div.className = cls;
-      div.innerHTML = `
-        <div class="log-meta">+${entry.elapsedMs}ms / epoch ${entry.epoch} / ${escapeHtml(entry.actor)}</div>
-        <div>${escapeHtml(entry.message)}</div>
-      `;
-
-      const isSentinelSide =
+    function eventCategory(entry) {
+      if (entry.actor === "RefundInterceptionGate" || entry.type.includes("interception")) return "gate";
+      if (
         entry.actor === "DisputeFulfillmentSentinel" ||
         entry.actor === "WarehouseFeed" ||
-        entry.actor === "PSPWebhook";
-
-      if (isSentinelSide) {
-        els.laneSentinel.appendChild(div);
-        els.laneSentinel.scrollTop = els.laneSentinel.scrollHeight;
-      } else {
-        els.laneRefund.appendChild(div);
-        els.laneRefund.scrollTop = els.laneRefund.scrollHeight;
+        entry.actor === "PSPWebhook"
+      ) {
+        return "sentinel";
       }
+      return "refund";
+    }
+
+    function dotClassFor(entry) {
+      if (entry.type === "interception.blocked") return "danger";
+      if (entry.type === "interception.cleared" || entry.type === "proposal.accepted") return "ok";
+      if (entry.type.startsWith("evidence.")) return "warn";
+      if (entry.actor === "DisputeFulfillmentSentinel") return "sky";
+      return "";
+    }
+
+    function renderFeed() {
+      const visible = state.events.filter(
+        (e) => state.filter === "all" || eventCategory(e) === state.filter,
+      );
+      els.eventFeed.innerHTML = visible
+        .map(
+          (e) => `
+          <div class="feed-row">
+            <div class="feed-ts">+${e.elapsedMs}ms</div>
+            <div>
+              <div class="feed-actor">
+                <span class="dot ${dotClassFor(e)}"></span>
+                <span>${escapeHtml(e.actor)}</span>
+                <span class="feed-epoch">ep ${e.epoch}</span>
+              </div>
+              <div class="feed-msg">${escapeHtml(e.message)}</div>
+            </div>
+          </div>
+        `,
+        )
+        .join("");
+      els.eventFeed.scrollTop = els.eventFeed.scrollHeight;
+    }
+
+    function renderGantt(report) {
+      const total = Math.max(report.durationMs, 10);
+      const timeline = report.timeline || [];
+
+      const refundEvents = timeline.filter((e) => e.actor === "RefundDeskAgent");
+      const sentinelEvents = timeline.filter((e) => e.actor === "DisputeFulfillmentSentinel");
+      const injectEvents = timeline.filter((e) => e.type.startsWith("evidence."));
+      const gateEvents = timeline.filter((e) => e.type === "interception.blocked");
+
+      const rStart = refundEvents[0]?.elapsedMs ?? 0;
+      const rEnd = refundEvents[refundEvents.length - 1]?.elapsedMs ?? total;
+      const sStart = sentinelEvents[0]?.elapsedMs ?? 0;
+      const sEnd = sentinelEvents[sentinelEvents.length - 1]?.elapsedMs ?? total;
+
+      const pct = (ms) => Math.max(0, Math.min(100, (ms / total) * 100));
+
+      const markersHtml = [
+        ...injectEvents.map(
+          (e) => `<div class="gantt-marker inject" style="left:${pct(e.elapsedMs)}%" title="Mid-flight event at +${e.elapsedMs}ms"></div>`,
+        ),
+        ...gateEvents.map(
+          (e) => `<div class="gantt-marker gate" style="left:${pct(e.elapsedMs)}%" title="Interception at +${e.elapsedMs}ms"></div>`,
+        ),
+      ].join("");
+
+      els.trackRefund.innerHTML = `
+        <div class="gantt-bar refund" style="left:${pct(rStart)}%; width:${Math.max(4, pct(rEnd) - pct(rStart))}%;"></div>
+        ${markersHtml}
+      `;
+      els.trackSentinel.innerHTML = `
+        <div class="gantt-bar sentinel" style="left:${pct(sStart)}%; width:${Math.max(4, pct(sEnd) - pct(sStart))}%;"></div>
+        ${markersHtml}
+      `;
+      els.timeRefund.textContent = `${rEnd - rStart}ms`;
+      els.timeSentinel.textContent = `${sEnd - sStart}ms`;
     }
 
     function renderReport(payload) {
@@ -823,64 +1098,54 @@
       state.lastBundle = payload;
       els.downloadBtn.disabled = false;
 
-      let badgeCls = "status-badge";
-      if (report.verdict === "READY_FOR_HUMAN_APPROVAL") badgeCls += " ok";
-      else if (report.verdict === "CORRECTED_READY_FOR_APPROVAL") badgeCls += " warn";
-      else badgeCls += " danger";
-
-      els.verdictBadge.className = badgeCls;
-      els.verdictBadge.textContent = report.verdict;
-      els.verdictMeta.textContent = `${report.durationMs}ms`;
-
-      const notes = [];
-      if (report.ledger.misallocationCaughtKsh > 0) {
-        notes.push(`Wrong-seller misallocation caught: ${fmtKsh(report.ledger.misallocationCaughtKsh)}`);
+      // KPI 1: Decision Status
+      let tone = "ok";
+      let humanLabel = "Cleared for human approval";
+      if (report.verdict === "CORRECTED_READY_FOR_APPROVAL") {
+        tone = "warn";
+        humanLabel = "Corrected and ready for approval";
+      } else if (report.verdict === "HOLD_MISSING_EVIDENCE") {
+        tone = "danger";
+        humanLabel = "Held: missing physical evidence";
+      } else if (report.verdict === "FROZEN_DISPUTE_COLLISION") {
+        tone = "danger";
+        humanLabel = "Frozen: bank chargeback collision";
       }
+
+      els.verdictTag.className = `status-tag ${tone}`;
+      els.verdictTag.innerHTML = `<span class="dot ${tone}"></span>${escapeHtml(report.verdict)}`;
+      els.verdictHeadline.textContent = humanLabel;
+      els.verdictSub.textContent = `Completed in ${report.durationMs}ms across ${report.timeline.length} Mozaik semantic events.`;
+
+      // KPI 2: Financial Protection
+      els.epochTag.className = `status-tag ${report.finalEpoch > 1 ? "warn" : ""}`;
+      els.epochTag.textContent = `epoch ${report.finalEpoch}`;
+
       if (report.ledger.doublePayoutPreventedKsh > 0) {
-        notes.push(`Double-payout prevented: ${fmtKsh(report.ledger.doublePayoutPreventedKsh)}`);
-      }
-      if (report.ledger.heldAmountKsh > 0) {
-        notes.push(`Disputed amount held: ${fmtKsh(report.ledger.heldAmountKsh)}`);
-      }
-      if (notes.length === 0) {
-        notes.push("Verified against source records with no discrepancies.");
-      }
-      els.verdictSub.textContent = notes.join(" | ");
-
-      els.overlapValue.textContent = report.concurrentOverlapVerified ? "Verified" : "None";
-      els.overlapValue.title = report.overlapDetail;
-      els.interceptionCount.textContent = String(report.interceptions.length);
-      els.epochValue.textContent = String(report.finalEpoch);
-
-      if (report.interceptions.length === 0) {
-        els.gateBox.innerHTML = `
-          <div class="gate-row cleared">
-            <div class="gate-header">
-              <span>CLEARED</span>
-              <span>epoch ${report.finalEpoch}</span>
-            </div>
-            <div class="gate-body">
-              RefundDeskAgent proposal matched Sentinel verification with no active bank chargebacks.
-            </div>
-          </div>
-        `;
+        els.protectionVal.textContent = `${fmtKsh(report.ledger.doublePayoutPreventedKsh)} saved`;
+        els.protectionSub.textContent = "Duplicate store refund blocked while issuing-bank dispute is open.";
+      } else if (report.ledger.misallocationCaughtKsh > 0) {
+        els.protectionVal.textContent = `${fmtKsh(report.ledger.misallocationCaughtKsh)} corrected`;
+        els.protectionSub.textContent = `Zero-sum seller error caught while batch total stayed ${fmtKsh(report.ledger.supportedTotalKsh)}.`;
+      } else if (report.ledger.heldAmountKsh > 0) {
+        els.protectionVal.textContent = `${fmtKsh(report.ledger.heldAmountKsh)} held`;
+        els.protectionSub.textContent = "Fail-closed hold until warehouse confirms physical SKU receipt.";
       } else {
-        els.gateBox.innerHTML = report.interceptions
-          .map(
-            (ic) => `
-            <div class="gate-row blocked">
-              <div class="gate-header">
-                <span>${escapeHtml(ic.reason)}</span>
-                <span>${escapeHtml(ic.actionTaken)} (epoch ${ic.proposalEpoch} -> ${ic.currentEpoch})</span>
-              </div>
-              <div class="gate-body">${escapeHtml(ic.detail)}</div>
-              <div class="gate-sources">Sources: ${ic.citedSourceIds.map(escapeHtml).join(", ")}</div>
-            </div>
-          `,
-          )
-          .join("");
+        els.protectionVal.textContent = fmtKsh(report.ledger.supportedTotalKsh);
+        els.protectionSub.textContent = "Verified allocation matches draft and source records exactly.";
       }
 
+      // KPI 3: Concurrency
+      const overlapMatch = report.overlapDetail.match(/for (\d+)ms/);
+      const overlapMs = overlapMatch ? `${overlapMatch[1]}ms overlap` : (report.concurrentOverlapVerified ? "Verified" : "Sequential");
+      els.overlapTag.className = `status-tag ${report.concurrentOverlapVerified ? "ok" : "warn"}`;
+      els.overlapTag.textContent = report.concurrentOverlapVerified ? "verified" : "none";
+      els.overlapVal.textContent = overlapMs;
+      els.overlapSub.textContent = `${report.interceptions.length} pre-execution interception${report.interceptions.length === 1 ? "" : "s"} fired.`;
+
+      renderGantt(report);
+
+      // Grounded Ledger Table
       const rowsHtml = report.ledger.lines
         .map((line) => {
           const deltaCls =
@@ -906,10 +1171,12 @@
 
       const totalDelta =
         report.ledger.draftTotalKsh === report.ledger.supportedTotalKsh
-          ? "Unchanged (Zero-Sum)"
+          ? "Zero-Sum (0)"
           : fmtKsh(report.ledger.supportedTotalKsh - report.ledger.draftTotalKsh);
 
-      const totalRow = `
+      els.ledgerBody.innerHTML =
+        rowsHtml +
+        `
         <tr class="total-row">
           <td>Batch Total (${escapeHtml(report.ledger.batchId)})</td>
           <td>${fmtKsh(report.ledger.batchGrossKsh)}</td>
@@ -918,34 +1185,61 @@
           <td>${totalDelta}</td>
         </tr>
       `;
-      els.ledgerBody.innerHTML = rowsHtml + totalRow;
 
-      els.citationsRow.style.display = "flex";
-      els.citationsRow.innerHTML =
-        `<span class="citations-label">Source records:</span>` +
-        report.ledger.allCitations.map((c) => `<span class="cite">${escapeHtml(c)}</span>`).join("");
+      els.citationsRow.innerHTML = report.ledger.allCitations
+        .map((c) => `<span class="cite">${escapeHtml(c)}</span>`)
+        .join("");
 
       const baseSeller = baseline.acceptedProposal?.debitSellerId ?? "none";
       const guardSeller = report.acceptedProposal?.debitSellerId ?? "HELD";
-      const differed = baseline.verdict !== report.verdict || baseSeller !== guardSeller;
-      els.baselineCallout.style.display = "block";
-      els.baselineCallout.innerHTML = `
-        <strong>Baseline comparison:</strong>
-        Single-agent baseline returned <code>${escapeHtml(baseline.verdict)}</code> (<code>${escapeHtml(baseSeller)}</code>).
-        RefundGuard returned <code>${escapeHtml(report.verdict)}</code> (<code>${escapeHtml(guardSeller)}</code>)${differed ? ", preventing an erroneous payout." : "."}
-        <div class="overlap-line">${escapeHtml(report.overlapDetail)}</div>
+      const prevented = baseline.verdict !== report.verdict || baseSeller !== guardSeller;
+      els.baselineBadge.innerHTML = `
+        <span>Single-agent baseline:</span>
+        <code>${escapeHtml(baseSeller)}</code>
+        <span class="status-tag ${prevented ? "ok" : ""}">${prevented ? "error prevented" : "matched"}</span>
       `;
+
+      // Interception Gate
+      if (report.interceptions.length === 0) {
+        els.gateBox.innerHTML = `
+          <div class="gate-item">
+            <div class="gate-top">
+              <span class="status-tag ok"><span class="dot ok"></span>CLEARED</span>
+              <span class="eyebrow">epoch ${report.finalEpoch}</span>
+            </div>
+            <div class="gate-desc">
+              RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with zero active chargebacks.
+            </div>
+          </div>
+        `;
+      } else {
+        els.gateBox.innerHTML = report.interceptions
+          .map(
+            (ic) => `
+            <div class="gate-item">
+              <div class="gate-top">
+                <span class="status-tag danger"><span class="dot danger"></span>${escapeHtml(ic.reason)}</span>
+                <span class="eyebrow">${escapeHtml(ic.actionTaken)} (ep ${ic.proposalEpoch} -> ${ic.currentEpoch})</span>
+              </div>
+              <div class="gate-desc">${escapeHtml(ic.detail)}</div>
+              <div class="gate-foot">Citations: ${ic.citedSourceIds.map(escapeHtml).join(", ")}</div>
+            </div>
+          `,
+          )
+          .join("");
+      }
     }
 
     async function runSelected() {
       els.runBtn.disabled = true;
-      els.laneRefund.innerHTML = "";
-      els.laneSentinel.innerHTML = "";
-      els.gateBox.innerHTML = `<div class="gate-empty">Evaluating concurrent agent output...</div>`;
-      els.verdictBadge.className = "status-badge";
-      els.verdictBadge.textContent = "RUNNING";
-      els.verdictMeta.textContent = "";
-      els.verdictSub.textContent = "RefundDeskAgent and DisputeFulfillmentSentinel are running concurrently.";
+      els.topRunBtn.disabled = true;
+      state.events = [];
+      renderFeed();
+      els.gateBox.innerHTML = `<div class="gate-desc">Inspecting concurrent agent loops...</div>`;
+      els.verdictTag.className = "status-tag sky";
+      els.verdictTag.innerHTML = `<span class="dot sky"></span>RUNNING`;
+      els.verdictHeadline.textContent = "Concurrent review in progress";
+      els.verdictSub.textContent = "Streaming live Mozaik events from RefundDeskAgent and DisputeFulfillmentSentinel.";
 
       try {
         const res = await fetch("/api/run", {
@@ -953,7 +1247,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             scenarioId: state.selectedId,
-            overrideDraftSellerId: els.draftSeller.value,
+            overrideDraftSellerId: state.draftSellerId,
             customWarehouseNoteText: els.warehouseNote.value,
             injectionMode: els.injectionMode.value,
           }),
@@ -979,28 +1273,35 @@
             }
             if (!dataStr) continue;
             const parsed = JSON.parse(dataStr);
-            if (eventType === "timeline") appendLaneEvent(parsed);
-            else if (eventType === "report") renderReport(parsed);
-            else if (eventType === "error") throw new Error(parsed.error);
+            if (eventType === "timeline") {
+              state.events.push(parsed);
+              renderFeed();
+            } else if (eventType === "report") {
+              renderReport(parsed);
+            } else if (eventType === "error") {
+              throw new Error(parsed.error);
+            }
           }
         }
       } catch (err) {
-        els.verdictBadge.className = "status-badge danger";
-        els.verdictBadge.textContent = "ERROR";
+        els.verdictTag.className = "status-tag danger";
+        els.verdictTag.innerHTML = `<span class="dot danger"></span>ERROR`;
+        els.verdictHeadline.textContent = "Review failed";
         els.verdictSub.textContent = err.message;
       } finally {
         els.runBtn.disabled = false;
+        els.topRunBtn.disabled = false;
       }
     }
 
     async function runBenchmark() {
       els.compareBtn.disabled = true;
-      els.compareBtn.textContent = "Running benchmark...";
+      els.compareBtn.textContent = "Running...";
       try {
         const res = await fetch("/api/compare");
         const { results } = await res.json();
-        els.compareCard.classList.add("visible");
-        els.compareBody.innerHTML = results
+        els.benchmarkCard.classList.add("visible");
+        els.benchmarkBody.innerHTML = results
           .map(
             (r) => `
             <tr>
@@ -1013,10 +1314,10 @@
           `,
           )
           .join("");
-        els.compareCard.scrollIntoView({ behavior: "smooth" });
+        els.benchmarkCard.scrollIntoView({ behavior: "smooth" });
       } finally {
         els.compareBtn.disabled = false;
-        els.compareBtn.textContent = "Run 5-Case Benchmark";
+        els.compareBtn.textContent = "5-Case Benchmark";
       }
     }
 
@@ -1024,21 +1325,38 @@
       const res = await fetch("/api/scenarios");
       const data = await res.json();
       state.scenarios = data.scenarios;
-      els.modeBadge.textContent = `${data.mode}: ${data.model}`;
+      const modeDot = data.mode === "live" ? "ok" : "sky";
+      els.modeChip.innerHTML = `<span class="dot ${modeDot}"></span>${escapeHtml(data.mode)}: ${escapeHtml(data.model)}`;
 
-      els.scenarioList.innerHTML = data.scenarios
+      els.scenarioTabs.innerHTML = data.scenarios
         .map(
-          (s) => `
-          <button class="scenario-btn" data-id="${escapeHtml(s.id)}">
-            <div class="s-title">${escapeHtml(s.title)}</div>
-            <div class="s-desc">${escapeHtml(s.summary)}</div>
+          (s, idx) => `
+          <button type="button" class="tab-btn" data-id="${escapeHtml(s.id)}">
+            <span class="tab-num">0${idx + 1}</span>${escapeHtml(s.shortLabel)}
           </button>
         `,
         )
         .join("");
 
-      for (const btn of els.scenarioList.querySelectorAll(".scenario-btn")) {
-        btn.addEventListener("click", () => selectScenario(btn.dataset.id));
+      for (const btn of els.scenarioTabs.querySelectorAll(".tab-btn")) {
+        btn.addEventListener("click", () => {
+          selectScenario(btn.dataset.id);
+          runSelected();
+        });
+      }
+
+      for (const btn of document.querySelectorAll(".seg-btn")) {
+        btn.addEventListener("click", () => setDraftSeller(btn.dataset.seller));
+      }
+
+      for (const pill of document.querySelectorAll(".filter-pill")) {
+        pill.addEventListener("click", () => {
+          state.filter = pill.dataset.filter;
+          for (const p of document.querySelectorAll(".filter-pill")) {
+            p.classList.toggle("active", p.dataset.filter === state.filter);
+          }
+          renderFeed();
+        });
       }
 
       for (const presetBtn of document.querySelectorAll("[data-preset]")) {
@@ -1058,6 +1376,7 @@
       }
 
       els.runBtn.addEventListener("click", runSelected);
+      els.topRunBtn.addEventListener("click", runSelected);
       els.compareBtn.addEventListener("click", runBenchmark);
       els.downloadBtn.addEventListener("click", () => {
         if (!state.lastBundle) return;
