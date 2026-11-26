@@ -134,7 +134,7 @@ export class RefundGuardMockRunner implements InferenceRunner {
 /**
  * Natural-language parser for the Sentinel mock runner.
  * Evaluates the actual warehouse note text and chargeback webhook narrative
- * present in the prompt — so live judge edits immediately change findings!
+ * present in the prompt, so live judge edits immediately change findings.
  */
 function analyzeSentinelEvidence(prompt: string): {
   epoch: number;
@@ -253,7 +253,7 @@ function analyzeSentinelEvidence(prompt: string): {
     disputeId: null,
     evidenceNoteId: noteId,
     confidence: "LOW",
-    summary: `Warehouse note ${noteId} is ambiguous between Seller A and Seller B — holding for human inspection.`,
+    summary: `Warehouse note ${noteId} is ambiguous between Seller A and Seller B; holding for human inspection.`,
     citedSourceIds: [noteId],
   };
 }

@@ -64,7 +64,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
     this.state.recordEvent(
       "interception.inspecting",
       "RefundInterceptionGate",
-      `Intercepted propose_refund(debit=${proposedSeller}, epoch=${proposalEpoch}) before execution — awaiting Sentinel verification for current epoch ${this.state.epoch}.`,
+      `Intercepted propose_refund(debit=${proposedSeller}, epoch=${proposalEpoch}) before execution; awaiting Sentinel verification for epoch ${this.state.epoch}.`,
       { proposedSeller, proposalEpoch, currentEpoch: this.state.epoch },
     );
 
@@ -161,7 +161,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
     this.state.recordEvent(
       "interception.cleared",
       "RefundInterceptionGate",
-      `Cleared propose_refund(debit=${proposedSeller}, epoch=${currentEpoch}) — matches Sentinel finding (${finding.evidenceNoteId}, ${finding.verifiedLineId}) with zero active chargebacks.`,
+      `Cleared propose_refund(debit=${proposedSeller}, epoch=${currentEpoch}): matches Sentinel finding (${finding.evidenceNoteId}, ${finding.verifiedLineId}) with zero active chargebacks.`,
       {
         approvedSellerId: proposedSeller,
         epoch: currentEpoch,

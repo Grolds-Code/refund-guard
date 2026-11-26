@@ -1,7 +1,7 @@
 /**
  * Immutable source records and domain types for RefundGuard.
  * All monetary figures are stored as integer Kenyan Shillings (KSh)
- * and computed strictly by deterministic code — never by LLMs.
+ * and computed strictly by deterministic code, never by LLMs.
  */
 
 export type SellerId = "SELLER-A" | "SELLER-B";

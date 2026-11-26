@@ -2,7 +2,7 @@
 
 **Concurrent Mozaik AI agents with mid-flight `InterceptionHandler` gating that prevent Black Friday double-payouts and wrong-seller refund misallocations before money moves.**
 
-Built solo for the **JigJoy Black Friday AI Hackathon (26–27 November 2026 — Agents in Finance)** on `@mozaik-ai/core@6.0.0`.
+Built solo for the **JigJoy Black Friday AI Hackathon (26-27 November 2026, Agents in Finance)** on `@mozaik-ai/core@6.0.0`.
 
 ---
 
@@ -10,16 +10,16 @@ Built solo for the **JigJoy Black Friday AI Hackathon (26–27 November 2026 —
 
 Two costly Black Friday failures slip straight past traditional reconciliation checks:
 
-1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in one checkout (`CHK-402`). The processor confirms a KSh 10,000 refund and settles **KSh 90,000** for the batch. The payout draft pays **A: KSh 60,000 / B: KSh 30,000** — which **balances exactly to KSh 90,000**, passing batch-total reconciliation — even though an unstructured warehouse return note proves **Seller A’s** jacket came back (`A: KSh 50,000 / B: KSh 40,000`).
-2. **Mid-Flight Chargeback Double-Payout:** A customer demands an immediate Black Friday refund via support while an asynchronous issuing-bank chargeback webhook (`VISA_13.1`, different external reference ID) arrives mid-review. Without concurrent monitoring and pre-execution interception, the refund desk approves the store refund on top of the open bank dispute — causing an irrecoverable **2× payout loss**.
+1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in one checkout (`CHK-402`). The processor confirms a KSh 10,000 refund and settles **KSh 90,000** for the batch. The payout draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances exactly to KSh 90,000** and passes batch-total reconciliation, even though an unstructured warehouse return note proves **Seller A's** jacket came back (`A: KSh 50,000 / B: KSh 40,000`).
+2. **Mid-Flight Chargeback Double-Payout:** A customer demands an immediate Black Friday refund via support while an asynchronous issuing-bank chargeback webhook (`VISA_13.1`, different external reference ID) arrives mid-review. Without concurrent monitoring and pre-execution interception, the refund desk approves the store refund on top of the open bank dispute, causing an irrecoverable **2x payout loss**.
 
-Neither failure is solved by a ledger total check or a single internal database foreign key: physical warehouse intake notes arrive as unstructured text, and bank chargebacks originate asynchronously outside the store’s ticketing system.
+Neither failure is solved by a ledger total check or a single internal database foreign key: physical warehouse intake notes arrive as unstructured text, and bank chargebacks originate asynchronously outside the store's ticketing system.
 
 ---
 
 ## How Our Agents Run Concurrently on Mozaik
 
-RefundGuard uses `@mozaik-ai/core@6.0.0`’s core concurrency primitives—**not** a sequential pipeline and **not** one chatbot with tools:
+RefundGuard uses `@mozaik-ai/core@6.0.0`'s core concurrency primitives, not a sequential pipeline and not one chatbot with tools:
 
 ```mermaid
 flowchart LR
@@ -45,14 +45,14 @@ flowchart LR
 
 ### Why Both Agents & Concurrency Are Genuine
 - **Two distinct unstructured reasoning tasks:** `RefundDeskAgent` interprets customer support tickets and Black Friday refund policy; `DisputeFulfillmentSentinel` independently interprets free-text warehouse inspection notes (including negation and reused boxes) and correlates external bank chargeback narratives without shared ticket IDs.
-- **True non-blocking parallel execution:** Publishing `case.opened` fans out synchronously to both agents’ `SituationHandler`s, which launch independent `runLoop`s concurrently. `AuditObserver` measures actual wall-clock overlap between both agents’ loop windows on every run (verified `5/5` in tests).
-- **Causal mid-flight interception (`InterceptionHandler`):** `RefundDeskAgent` runs with `RefundInterceptionGate` attached as the 4th argument to `runLoop`. Before `propose_refund` can execute, Mozaik pauses the `function_call` transition and awaits `handle()`. The gate inspects `RefundGuardState.epoch` and `DisputeFulfillmentSentinel`’s latest finding:
-  - **Wrong seller (`WRONG_SELLER_ALLOCATION`)** or **late correction (`SUPERSEDED_EVIDENCE`, `proposalEpoch < currentEpoch`)** → blocks the tool call, injects Sentinel’s verified findings, and rewrites the transition to `message_received` so Agent 1 re-plans on the latest epoch.
-  - **Missing receipt (`MISSING_EVIDENCE`)** or **chargeback collision (`DOUBLE_PAYOUT_BLOCKED`)** → halts into `model_message` (fail-closed human review); `propose_refund` never executes.
+- **True non-blocking parallel execution:** Publishing `case.opened` fans out synchronously to both agents' `SituationHandler`s, which launch independent `runLoop`s concurrently. `AuditObserver` measures actual wall-clock overlap between both agents' loop windows on every run (verified `5/5` in tests).
+- **Causal mid-flight interception (`InterceptionHandler`):** `RefundDeskAgent` runs with `RefundInterceptionGate` attached as the 4th argument to `runLoop`. Before `propose_refund` can execute, Mozaik pauses the `function_call` transition and awaits `handle()`. The gate inspects `RefundGuardState.epoch` and `DisputeFulfillmentSentinel`'s latest finding:
+  - **Wrong seller (`WRONG_SELLER_ALLOCATION`)** or **late correction (`SUPERSEDED_EVIDENCE`, `proposalEpoch < currentEpoch`)** -> blocks the tool call, injects Sentinel's verified findings, and rewrites the transition to `message_received` so Agent 1 re-plans on the latest epoch.
+  - **Missing receipt (`MISSING_EVIDENCE`)** or **chargeback collision (`DOUBLE_PAYOUT_BLOCKED`)** -> halts into `model_message` (fail-closed human review); `propose_refund` never executes.
 
 ---
 
-## Quickstart (Works Out of the Box — Zero API Key Required)
+## Quickstart (Zero API Key Required)
 
 Requires **Node.js 20+** (tested on Node 22).
 
@@ -83,7 +83,7 @@ npm run cli -- case-4-late-correction-midflight
 
 ### Live LLM Mode vs. Deterministic Offline Mode
 - **Default (`REFUND_GUARD_MODE=auto`):** If `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` is set in `.env`, RefundGuard automatically runs live LLM inference through `@mozaik-ai/core@6.0.0` (`gpt-5.4-mini`, `claude-haiku-4-5`, or `gemini-3.5-flash`).
-- **Zero-key judge mode:** When no API key is configured, RefundGuard uses `RefundGuardMockRunner` (a real Mozaik `InferenceRunner` modeled on `mozaik-examples/custom-inference-runner`) that parses the actual warehouse notes, tickets, chargebacks, and interception feedback in the prompt—so **every test, live UI text edit, and mid-flight injection works deterministically offline**.
+- **Zero-key judge mode:** When no API key is configured, RefundGuard uses `RefundGuardMockRunner` (a real Mozaik `InferenceRunner` modeled on `mozaik-examples/custom-inference-runner`) that parses the actual warehouse notes, tickets, chargebacks, and interception feedback in the prompt, so **every test, live UI text edit, and mid-flight injection works deterministically offline**.
 
 See [`.env.example`](.env.example) for environment options.
 

@@ -147,7 +147,7 @@ export function createSentinelAgent(
     name: "DisputeFulfillmentSentinel",
     capabilities: ["warehouse-inspection", "chargeback-correlation", "evidence-grounding"],
     instruction:
-      "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and asynchronous issuing-bank chargeback narratives. First check if any bank chargeback collides with the checkout (even if external IDs differ—match by card last-4, checkout suffix, amount, and item description); if so, publish status=DISPUTE_COLLISION. Otherwise, determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived or contents are unverified/ambiguous, publish status=MISSING_OR_AMBIGUOUS. Always call `publish_sentinel_finding` with the exact CURRENT_EPOCH and source IDs.",
+      "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and asynchronous issuing-bank chargeback narratives. First check if any bank chargeback collides with the checkout (even if external IDs differ, match by card last-4, checkout suffix, amount, and item description); if so, publish status=DISPUTE_COLLISION. Otherwise, determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived or contents are unverified/ambiguous, publish status=MISSING_OR_AMBIGUOUS. Always call `publish_sentinel_finding` with the exact CURRENT_EPOCH and source IDs.",
     tools: [publishFindingTool],
     handlers: [onEvidenceEvent],
   });

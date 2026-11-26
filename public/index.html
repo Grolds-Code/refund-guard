@@ -3,429 +3,735 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RefundGuard — Concurrent Mozaik Interception Desk</title>
+  <title>RefundGuard | Payout &amp; Refund Interception</title>
+  <meta name="description" content="Concurrent Mozaik agent review with pre-execution interception for marketplace refunds, chargebacks, and seller payouts." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #0b0f17;
-      --surface: #121826;
-      --surface-2: #182133;
-      --border: #26324a;
-      --text: #e6edf7;
-      --muted: #8ea0bc;
-      --accent: #38bdf8;
-      --green: #22c55e;
-      --amber: #f59e0b;
-      --red: #ef4444;
-      --purple: #a78bfa;
-      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --bg: #f7f7f8;
+      --surface: #ffffff;
+      --subtle: #fafafa;
+      --border: #e4e4e7;
+      --border-strong: #d4d4d8;
+      --ink: #111113;
+      --ink-secondary: #52525b;
+      --ink-muted: #71717a;
+
+      --ok-ink: #166534;
+      --ok-bg: #f0fdf4;
+      --ok-border: #bbf7d0;
+
+      --warn-ink: #92400e;
+      --warn-bg: #fffbeb;
+      --warn-border: #fde68a;
+
+      --danger-ink: #991b1b;
+      --danger-bg: #fef2f2;
+      --danger-border: #fecaca;
+
+      --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --radius: 8px;
     }
+
     * { box-sizing: border-box; }
-    body {
+
+    html, body {
       margin: 0;
+      padding: 0;
       background: var(--bg);
-      color: var(--text);
+      color: var(--ink);
       font-family: var(--sans);
-      line-height: 1.45;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
     }
+
+    /* Top Bar */
     header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 16px 24px;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-inner {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
     }
     .brand h1 {
       margin: 0;
-      font-size: 1.2rem;
-      letter-spacing: -0.02em;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      color: var(--ink);
     }
-    .brand p {
-      margin: 2px 0 0;
-      font-size: 0.84rem;
-      color: var(--muted);
+    .brand span {
+      font-size: 13px;
+      color: var(--ink-muted);
     }
-    .badges {
+    .header-actions {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       flex-wrap: wrap;
     }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 0.76rem;
-      font-weight: 600;
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--text);
+    .meta-tag {
       font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--ink-secondary);
+      padding: 4px 8px;
+      background: var(--subtle);
+      border: 1px solid var(--border);
+      border-radius: 6px;
     }
-    .pill.live { border-color: rgba(34,197,94,.5); color: #86efac; }
-    .pill.mock { border-color: rgba(56,189,248,.5); color: #7dd3fc; }
-    .pill.ok { background: rgba(34,197,94,.14); border-color: rgba(34,197,94,.5); color: #86efac; }
-    .pill.warn { background: rgba(245,158,11,.15); border-color: rgba(245,158,11,.5); color: #fcd34d; }
-    .pill.danger { background: rgba(239,68,68,.15); border-color: rgba(239,68,68,.55); color: #fca5a5; }
-    .layout {
-      display: grid;
-      grid-template-columns: 370px 1fr;
-      gap: 18px;
-      padding: 18px 24px 32px;
-      max-width: 1480px;
+
+    /* Main Grid */
+    main {
+      max-width: 1320px;
       margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 336px minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
     }
-    @media (max-width: 1024px) {
-      .layout { grid-template-columns: 1fr; }
+    @media (max-width: 980px) {
+      main {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
     }
-    .card {
+
+    /* Panels */
+    .panel {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
+      border-radius: var(--radius);
     }
-    .card h2 {
-      margin: 0 0 10px;
-      font-size: 0.94rem;
+    .panel-section {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-section:last-child {
+      border-bottom: none;
+    }
+    .section-label {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--muted);
+      letter-spacing: 0.06em;
+      color: var(--ink-muted);
     }
+
+    /* Scenario Selector */
     .scenario-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      margin-bottom: 14px;
+      gap: 4px;
     }
     .scenario-btn {
+      width: 100%;
       text-align: left;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--text);
+      padding: 9px 11px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ink);
       cursor: pointer;
-      transition: border-color .15s, background .15s;
+      transition: background 0.12s ease, border-color 0.12s ease;
     }
-    .scenario-btn:hover { border-color: var(--accent); }
+    .scenario-btn:hover {
+      background: var(--subtle);
+      border-color: var(--border);
+    }
     .scenario-btn.active {
-      border-color: var(--accent);
-      background: rgba(56, 189, 248, 0.12);
+      background: var(--subtle);
+      border-color: var(--ink);
     }
-    .scenario-btn .title { font-weight: 600; font-size: 0.88rem; }
-    .scenario-btn .desc { font-size: 0.78rem; color: var(--muted); margin-top: 3px; }
+    .scenario-btn .s-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ink);
+    }
+    .scenario-btn .s-desc {
+      font-size: 12px;
+      color: var(--ink-muted);
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+
+    /* Form Controls */
+    .field {
+      margin-bottom: 14px;
+    }
+    .field:last-of-type {
+      margin-bottom: 0;
+    }
     label {
       display: block;
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: var(--muted);
-      margin: 12px 0 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-secondary);
+      margin-bottom: 6px;
+    }
+    select, textarea {
+      width: 100%;
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: var(--sans);
+      font-size: 13px;
+      transition: border-color 0.12s ease;
+    }
+    textarea {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      min-height: 88px;
+      resize: vertical;
+    }
+    select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--ink);
+    }
+    .preset-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .text-btn {
+      background: var(--subtle);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 3px 8px;
+      font-size: 11.5px;
+      color: var(--ink-secondary);
+      cursor: pointer;
+    }
+    .text-btn:hover {
+      border-color: var(--border-strong);
+      color: var(--ink);
+    }
+
+    /* Buttons */
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .btn-primary {
+      flex: 1;
+      padding: 9px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: #ffffff;
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.12s ease;
+    }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-secondary {
+      padding: 7px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.12s ease;
+    }
+    .btn-secondary:hover { background: var(--subtle); }
+    .btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Right Workspace */
+    .workspace {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    /* Status Summary Bar */
+    .status-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .status-main {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .status-heading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .status-badge {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 500;
+      padding: 3px 8px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--subtle);
+      color: var(--ink-secondary);
+    }
+    .status-badge.ok {
+      color: var(--ok-ink);
+      background: var(--ok-bg);
+      border-color: var(--ok-border);
+    }
+    .status-badge.warn {
+      color: var(--warn-ink);
+      background: var(--warn-bg);
+      border-color: var(--warn-border);
+    }
+    .status-badge.danger {
+      color: var(--danger-ink);
+      background: var(--danger-bg);
+      border-color: var(--danger-border);
+    }
+    .status-meta {
+      font-size: 12.5px;
+      color: var(--ink-muted);
+      font-family: var(--mono);
+    }
+    .status-detail {
+      font-size: 13px;
+      color: var(--ink-secondary);
+    }
+    .metrics-strip {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .metric {
+      text-align: right;
+    }
+    .metric-label {
+      font-size: 11px;
+      color: var(--ink-muted);
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
-    textarea, select {
-      width: 100%;
-      background: #0d1320;
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 9px 10px;
+    .metric-value {
       font-family: var(--mono);
-      font-size: 0.8rem;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ink);
     }
-    textarea { min-height: 92px; resize: vertical; }
-    .preset-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 6px;
-    }
-    .chip-btn {
-      font-size: 0.73rem;
-      padding: 4px 8px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--muted);
-      cursor: pointer;
-    }
-    .chip-btn:hover { color: var(--text); border-color: var(--accent); }
-    .actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 14px;
-    }
-    button.primary {
-      flex: 1;
-      padding: 11px 14px;
-      border: none;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #0284c7, #2563eb);
-      color: #fff;
-      font-weight: 700;
-      font-size: 0.9rem;
-      cursor: pointer;
-    }
-    button.primary:disabled { opacity: 0.55; cursor: not-allowed; }
-    button.secondary {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--text);
-      font-weight: 600;
-      font-size: 0.82rem;
-      cursor: pointer;
-    }
-    button.secondary:hover { border-color: var(--accent); }
-    .right-col {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-    .verdict-banner {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 14px 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-    }
-    .verdict-banner.ok { border-color: rgba(34,197,94,.55); background: rgba(34,197,94,.08); }
-    .verdict-banner.warn { border-color: rgba(245,158,11,.6); background: rgba(245,158,11,.08); }
-    .verdict-banner.danger { border-color: rgba(239,68,68,.65); background: rgba(239,68,68,.09); }
-    .verdict-title { font-size: 1.08rem; font-weight: 700; }
-    .verdict-sub { font-size: 0.84rem; color: var(--muted); margin-top: 2px; }
-    .lanes {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-    }
-    @media (max-width: 780px) {
-      .lanes { grid-template-columns: 1fr; }
-    }
-    .lane {
-      background: #0d1320;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-      min-height: 195px;
-      max-height: 280px;
-      overflow-y: auto;
-    }
-    .lane-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--border);
-      font-size: 0.82rem;
-      font-weight: 700;
-    }
-    .event-item {
-      font-family: var(--mono);
-      font-size: 0.76rem;
-      padding: 6px 8px;
-      border-radius: 6px;
-      margin-bottom: 6px;
-      background: var(--surface);
-      border-left: 3px solid var(--accent);
-      word-break: break-word;
-    }
-    .event-item.blocked { border-left-color: var(--red); background: rgba(239,68,68,.08); }
-    .event-item.cleared { border-left-color: var(--green); background: rgba(34,197,94,.08); }
-    .event-item.injected { border-left-color: var(--amber); background: rgba(245,158,11,.1); }
-    .ts { color: var(--muted); margin-right: 6px; }
-    .gate-box {
-      border-radius: 10px;
-      padding: 12px;
-      background: #0d1320;
-      border: 1px solid var(--border);
-      font-family: var(--mono);
-      font-size: 0.8rem;
-    }
-    .gate-item {
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid rgba(239,68,68,.5);
-      background: rgba(239,68,68,.09);
-      margin-bottom: 8px;
-    }
-    .gate-item:last-child { margin-bottom: 0; }
+
+    /* Ledger Table */
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.83rem;
-      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
     }
-    th, td {
-      padding: 8px 10px;
+    th {
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--ink-muted);
+      padding: 0 10px 10px;
       border-bottom: 1px solid var(--border);
       text-align: right;
     }
-    th:first-child, td:first-child { text-align: left; }
-    th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; }
-    .delta-neg { color: #fca5a5; }
-    .delta-pos { color: #86efac; }
+    th:first-child, td:first-child {
+      text-align: left;
+      padding-left: 0;
+    }
+    th:last-child, td:last-child {
+      padding-right: 0;
+    }
+    td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      text-align: right;
+      color: var(--ink);
+    }
+    td:first-child {
+      font-family: var(--sans);
+      font-size: 13px;
+    }
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+    tr.total-row td {
+      font-weight: 600;
+      background: var(--subtle);
+      padding-top: 12px;
+      padding-bottom: 12px;
+      border-top: 1px solid var(--border-strong);
+    }
+    .seller-sub {
+      display: block;
+      font-size: 12px;
+      color: var(--ink-muted);
+      font-weight: 400;
+    }
+    .delta-neg { color: var(--danger-ink); }
+    .delta-pos { color: var(--ok-ink); }
+    .delta-zero { color: var(--ink-muted); }
+
     .citations {
       display: flex;
+      align-items: center;
       flex-wrap: wrap;
       gap: 6px;
-      margin-top: 10px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .citations-label {
+      font-size: 11.5px;
+      color: var(--ink-muted);
+      margin-right: 4px;
     }
     .cite {
       font-family: var(--mono);
-      font-size: 0.72rem;
-      padding: 2px 7px;
-      border-radius: 5px;
-      background: var(--surface-2);
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--subtle);
       border: 1px solid var(--border);
-      color: #c4b5fd;
+      color: var(--ink-secondary);
     }
-    .baseline-callout {
-      margin-top: 10px;
+
+    /* Interception Gate */
+    .gate-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .gate-empty {
+      font-size: 13px;
+      color: var(--ink-secondary);
+    }
+    .gate-row {
+      padding: 12px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--subtle);
+    }
+    .gate-row.blocked {
+      border-color: var(--danger-border);
+      background: var(--danger-bg);
+    }
+    .gate-row.cleared {
+      border-color: var(--ok-border);
+      background: var(--ok-bg);
+    }
+    .gate-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+    .gate-body {
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .gate-sources {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+
+    /* Concurrent Agent Lanes */
+    .lanes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 760px) {
+      .lanes { grid-template-columns: 1fr; }
+    }
+    .lane {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--subtle);
+      display: flex;
+      flex-direction: column;
+    }
+    .lane-head {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 6px 6px 0 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12.5px;
+      font-weight: 500;
+    }
+    .lane-tool {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+    .lane-body {
       padding: 10px 12px;
-      border-radius: 8px;
-      background: rgba(167,139,250,.08);
-      border: 1px solid rgba(167,139,250,.35);
-      font-size: 0.82rem;
+      min-height: 160px;
+      max-height: 260px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
-    .compare-modal {
+    .log-entry {
+      font-size: 12px;
+      line-height: 1.45;
+      padding: 8px 10px;
+      border-radius: 5px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      word-break: break-word;
+    }
+    .log-entry.blocked {
+      border-color: var(--danger-border);
+      background: var(--danger-bg);
+    }
+    .log-entry.cleared {
+      border-color: var(--ok-border);
+      background: var(--ok-bg);
+    }
+    .log-entry.injected {
+      border-color: var(--warn-border);
+      background: var(--warn-bg);
+    }
+    .log-meta {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-muted);
+      margin-bottom: 2px;
+    }
+
+    /* Baseline Summary */
+    .baseline-note {
       margin-top: 12px;
-      display: none;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: var(--subtle);
+      border: 1px solid var(--border);
+      font-size: 12.5px;
+      color: var(--ink-secondary);
     }
-    .compare-modal.visible { display: block; }
+    .baseline-note code {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--ink);
+    }
+    .overlap-line {
+      margin-top: 4px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+
+    .compare-panel { display: none; }
+    .compare-panel.visible { display: block; }
   </style>
 </head>
 <body>
   <header>
-    <div class="brand">
-      <h1>RefundGuard — Concurrent Mozaik Interception Desk</h1>
-      <p>Prevents Black Friday double-payouts &amp; wrong-seller refund misallocations before money moves</p>
-    </div>
-    <div class="badges">
-      <span class="pill">@mozaik-ai/core@6.0.0</span>
-      <span id="modeBadge" class="pill mock">loading…</span>
-      <button id="compareBtn" class="secondary">Run 5-Case Baseline Benchmark</button>
+    <div class="header-inner">
+      <div class="brand">
+        <h1>RefundGuard</h1>
+        <span>Marketplace refund &amp; payout interception</span>
+      </div>
+      <div class="header-actions">
+        <span class="meta-tag">@mozaik-ai/core@6.0.0</span>
+        <span id="modeBadge" class="meta-tag">Initializing</span>
+        <button id="compareBtn" class="btn-secondary">Run 5-Case Benchmark</button>
+      </div>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="card">
-      <h2>1. Select Black Friday Case</h2>
-      <div id="scenarioList" class="scenario-list"></div>
-
-      <h2>2. Judge Live Input Controls</h2>
-      <div style="font-size:0.78rem; color:var(--muted); margin-bottom:6px;">
-        Edit any field below and re-run to watch concurrent agents + Mozaik <code>InterceptionHandler</code> flip the decision live.
+  <main>
+    <aside class="panel">
+      <div class="panel-section">
+        <h2 class="section-label">Scenarios</h2>
+        <div id="scenarioList" class="scenario-list"></div>
       </div>
 
-      <label for="draftSeller">Payout Draft Debited Seller</label>
-      <select id="draftSeller">
-        <option value="SELLER-A">SELLER-A — Nairobi Streetwear Co. (Draft A: 50k / B: 40k)</option>
-        <option value="SELLER-B">SELLER-B — Rift Valley Footwear (Draft A: 60k / B: 30k)</option>
-      </select>
+      <div class="panel-section">
+        <h2 class="section-label">Case Inputs</h2>
 
-      <label for="warehouseNote">Unstructured Warehouse Return Note (Parsed by Sentinel)</label>
-      <textarea id="warehouseNote"></textarea>
-      <div class="preset-row">
-        <button type="button" class="chip-btn" data-preset="seller-a">Preset: Seller A Jacket</button>
-        <button type="button" class="chip-btn" data-preset="seller-b">Preset: Seller B Boots</button>
-        <button type="button" class="chip-btn" data-preset="missing">Preset: No Parcel</button>
-      </div>
-
-      <label for="injectionMode">Mid-Flight Async Event (Arrives While Agent 1 Runs)</label>
-      <select id="injectionMode">
-        <option value="scenario-default">Use scenario default</option>
-        <option value="none">None (no mid-flight event)</option>
-        <option value="chargeback">Inject PSP Chargeback Webhook Mid-Run (KSh 10,000)</option>
-        <option value="correction-seller-a">Inject Late QC Correction Mid-Run (→ Seller A)</option>
-        <option value="correction-seller-b">Inject Late QC Correction Mid-Run (→ Seller B)</option>
-      </select>
-
-      <div class="actions">
-        <button id="runBtn" class="primary">Run Concurrent Review</button>
-        <button id="downloadBtn" class="secondary" disabled>Export JSON</button>
-      </div>
-    </section>
-
-    <section class="right-col">
-      <div id="verdictBanner" class="verdict-banner">
-        <div>
-          <div id="verdictTitle" class="verdict-title">Ready to inspect Black Friday checkout CHK-402</div>
-          <div id="verdictSub" class="verdict-sub">Pick a scenario or edit the warehouse note, then click “Run Concurrent Review”.</div>
+        <div class="field">
+          <label for="draftSeller">Payout draft debited seller</label>
+          <select id="draftSeller">
+            <option value="SELLER-A">SELLER-A: Nairobi Streetwear Co. (A: 50k / B: 40k)</option>
+            <option value="SELLER-B">SELLER-B: Rift Valley Footwear (A: 60k / B: 30k)</option>
+          </select>
         </div>
-        <div id="overlapBadge" class="pill">Concurrency: idle</div>
-      </div>
 
-      <div class="card">
-        <h2>Concurrent Mozaik Agent Lanes (Non-Blocking <code>runLoop</code> + Shared <code>RuntimeState</code>)</h2>
-        <div class="lanes">
-          <div class="lane">
-            <div class="lane-head">
-              <span>Agent 1: RefundDeskAgent</span>
-              <span style="color:var(--accent); font-family:var(--mono);">propose_refund</span>
-            </div>
-            <div id="laneRefund"></div>
-          </div>
-          <div class="lane">
-            <div class="lane-head">
-              <span>Agent 2: DisputeFulfillmentSentinel</span>
-              <span style="color:var(--purple); font-family:var(--mono);">publish_sentinel_finding</span>
-            </div>
-            <div id="laneSentinel"></div>
+        <div class="field">
+          <label for="warehouseNote">Warehouse return note (free text)</label>
+          <textarea id="warehouseNote"></textarea>
+          <div class="preset-row">
+            <button type="button" class="text-btn" data-preset="seller-a">Seller A jacket</button>
+            <button type="button" class="text-btn" data-preset="seller-b">Seller B boots</button>
+            <button type="button" class="text-btn" data-preset="missing">No parcel</button>
           </div>
         </div>
+
+        <div class="field">
+          <label for="injectionMode">Mid-flight async event</label>
+          <select id="injectionMode">
+            <option value="scenario-default">Scenario default</option>
+            <option value="none">None</option>
+            <option value="chargeback">PSP chargeback webhook (KSh 10,000)</option>
+            <option value="correction-seller-a">Late QC correction (Seller A)</option>
+            <option value="correction-seller-b">Late QC correction (Seller B)</option>
+          </select>
+        </div>
+
+        <div class="btn-row">
+          <button id="runBtn" class="btn-primary">Run Review</button>
+          <button id="downloadBtn" class="btn-secondary" disabled>Export JSON</button>
+        </div>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div class="status-bar">
+        <div class="status-main">
+          <div class="status-heading">
+            <span id="verdictBadge" class="status-badge">IDLE</span>
+            <span id="verdictMeta" class="status-meta"></span>
+          </div>
+          <div id="verdictSub" class="status-detail">Select a scenario or modify case inputs, then run a review.</div>
+        </div>
+        <div class="metrics-strip">
+          <div class="metric">
+            <div class="metric-label">Concurrency</div>
+            <div id="overlapValue" class="metric-value">Pending</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Interceptions</div>
+            <div id="interceptionCount" class="metric-value">0</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Epoch</div>
+            <div id="epochValue" class="metric-value">1</div>
+          </div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Mozaik <code>InterceptionHandler</code> Gate (Awaited Pre-Execution Guard on <code>function_call</code>)</h2>
-        <div id="gateBox" class="gate-box">No interception fired yet. Run a case to observe pre-execution inspection.</div>
+      <div class="panel">
+        <div class="panel-section">
+          <h2 class="section-label">Grounded Payout Allocation (Deterministic Integer KSh)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Seller</th>
+                <th>Gross</th>
+                <th>Draft Payout</th>
+                <th>Supported Payout</th>
+                <th>Delta</th>
+              </tr>
+            </thead>
+            <tbody id="ledgerBody">
+              <tr>
+                <td colspan="5" style="text-align:center; color:var(--ink-muted); font-family:var(--sans);">
+                  Run a scenario to calculate grounded allocations.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div id="citationsRow" class="citations" style="display:none;"></div>
+          <div id="baselineCallout" class="baseline-note" style="display:none;"></div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Deterministic Source-Grounded KSh Ledger (Zero LLM Arithmetic)</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Seller</th>
-              <th>Gross</th>
-              <th>Draft Payout</th>
-              <th>Supported Payout</th>
-              <th>Delta</th>
-            </tr>
-          </thead>
-          <tbody id="ledgerBody">
-            <tr><td colspan="5" style="text-align:center; color:var(--muted);">Run a scenario to compute grounded payouts.</td></tr>
-          </tbody>
-        </table>
-        <div id="citationsRow" class="citations"></div>
-        <div id="baselineCallout" class="baseline-callout" style="display:none;"></div>
+      <div class="panel">
+        <div class="panel-section">
+          <h2 class="section-label">Pre-Execution Interception Gate (Mozaik InterceptionHandler)</h2>
+          <div id="gateBox" class="gate-list">
+            <div class="gate-empty">Waiting for review execution.</div>
+          </div>
+        </div>
       </div>
 
-      <div id="compareCard" class="card compare-modal">
-        <h2>5-Case Benchmark: Single-Agent Baseline vs. Concurrent RefundGuard</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Scenario</th>
-              <th>Baseline (1 Agent)</th>
-              <th>RefundGuard (Mozaik)</th>
-              <th>Interception</th>
-              <th>Overlap</th>
-            </tr>
-          </thead>
-          <tbody id="compareBody"></tbody>
-        </table>
+      <div class="panel">
+        <div class="panel-section">
+          <h2 class="section-label">Concurrent Agent Activity (Shared RuntimeState)</h2>
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>RefundDeskAgent</span>
+                <span class="lane-tool">propose_refund</span>
+              </div>
+              <div id="laneRefund" class="lane-body"></div>
+            </div>
+            <div class="lane">
+              <div class="lane-head">
+                <span>DisputeFulfillmentSentinel</span>
+                <span class="lane-tool">publish_sentinel_finding</span>
+              </div>
+              <div id="laneSentinel" class="lane-body"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="compareCard" class="panel compare-panel">
+        <div class="panel-section">
+          <h2 class="section-label">5-Case Benchmark: Single-Agent Baseline vs. Concurrent RefundGuard</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Scenario</th>
+                <th>Single-Agent Baseline</th>
+                <th>RefundGuard</th>
+                <th>Interception</th>
+                <th>Overlap</th>
+              </tr>
+            </thead>
+            <tbody id="compareBody"></tbody>
+          </table>
+        </div>
       </div>
     </section>
   </main>
@@ -446,10 +752,12 @@
       runBtn: document.getElementById("runBtn"),
       downloadBtn: document.getElementById("downloadBtn"),
       compareBtn: document.getElementById("compareBtn"),
-      verdictBanner: document.getElementById("verdictBanner"),
-      verdictTitle: document.getElementById("verdictTitle"),
+      verdictBadge: document.getElementById("verdictBadge"),
+      verdictMeta: document.getElementById("verdictMeta"),
       verdictSub: document.getElementById("verdictSub"),
-      overlapBadge: document.getElementById("overlapBadge"),
+      overlapValue: document.getElementById("overlapValue"),
+      interceptionCount: document.getElementById("interceptionCount"),
+      epochValue: document.getElementById("epochValue"),
       laneRefund: document.getElementById("laneRefund"),
       laneSentinel: document.getElementById("laneSentinel"),
       gateBox: document.getElementById("gateBox"),
@@ -486,12 +794,15 @@
 
     function appendLaneEvent(entry) {
       const div = document.createElement("div");
-      let cls = "event-item";
+      let cls = "log-entry";
       if (entry.type === "interception.blocked") cls += " blocked";
       else if (entry.type === "interception.cleared" || entry.type === "proposal.accepted") cls += " cleared";
       else if (entry.type.startsWith("evidence.")) cls += " injected";
       div.className = cls;
-      div.innerHTML = `<span class="ts">[+${entry.elapsedMs}ms · ep${entry.epoch}]</span><strong>${escapeHtml(entry.actor)}</strong>: ${escapeHtml(entry.message)}`;
+      div.innerHTML = `
+        <div class="log-meta">+${entry.elapsedMs}ms / epoch ${entry.epoch} / ${escapeHtml(entry.actor)}</div>
+        <div>${escapeHtml(entry.message)}</div>
+      `;
 
       const isSentinelSide =
         entry.actor === "DisputeFulfillmentSentinel" ||
@@ -512,57 +823,78 @@
       state.lastBundle = payload;
       els.downloadBtn.disabled = false;
 
-      // Verdict banner
-      els.verdictBanner.className = "verdict-banner";
-      if (report.verdict === "READY_FOR_HUMAN_APPROVAL") els.verdictBanner.classList.add("ok");
-      else if (report.verdict === "CORRECTED_READY_FOR_APPROVAL") els.verdictBanner.classList.add("warn");
-      else els.verdictBanner.classList.add("danger");
+      let badgeCls = "status-badge";
+      if (report.verdict === "READY_FOR_HUMAN_APPROVAL") badgeCls += " ok";
+      else if (report.verdict === "CORRECTED_READY_FOR_APPROVAL") badgeCls += " warn";
+      else badgeCls += " danger";
 
-      els.verdictTitle.textContent = `${report.verdict} (Epoch ${report.finalEpoch} · ${report.durationMs}ms)`;
-      const extras = [];
+      els.verdictBadge.className = badgeCls;
+      els.verdictBadge.textContent = report.verdict;
+      els.verdictMeta.textContent = `${report.durationMs}ms`;
+
+      const notes = [];
       if (report.ledger.misallocationCaughtKsh > 0) {
-        extras.push(`Zero-sum wrong-seller misallocation caught: ${fmtKsh(report.ledger.misallocationCaughtKsh)}`);
+        notes.push(`Wrong-seller misallocation caught: ${fmtKsh(report.ledger.misallocationCaughtKsh)}`);
       }
       if (report.ledger.doublePayoutPreventedKsh > 0) {
-        extras.push(`Double-payout prevented: ${fmtKsh(report.ledger.doublePayoutPreventedKsh)}`);
+        notes.push(`Double-payout prevented: ${fmtKsh(report.ledger.doublePayoutPreventedKsh)}`);
       }
       if (report.ledger.heldAmountKsh > 0) {
-        extras.push(`Funds safely held: ${fmtKsh(report.ledger.heldAmountKsh)}`);
+        notes.push(`Disputed amount held: ${fmtKsh(report.ledger.heldAmountKsh)}`);
       }
-      if (extras.length === 0) extras.push("Verified against source records with zero discrepancies.");
-      els.verdictSub.textContent = extras.join(" · ");
+      if (notes.length === 0) {
+        notes.push("Verified against source records with no discrepancies.");
+      }
+      els.verdictSub.textContent = notes.join(" | ");
 
-      els.overlapBadge.className = `pill ${report.concurrentOverlapVerified ? "ok" : "warn"}`;
-      els.overlapBadge.textContent = report.concurrentOverlapVerified
-        ? `Concurrent Overlap: VERIFIED`
-        : `Concurrent Overlap: NONE`;
-      els.overlapBadge.title = report.overlapDetail;
+      els.overlapValue.textContent = report.concurrentOverlapVerified ? "Verified" : "None";
+      els.overlapValue.title = report.overlapDetail;
+      els.interceptionCount.textContent = String(report.interceptions.length);
+      els.epochValue.textContent = String(report.finalEpoch);
 
-      // Interception gate box
       if (report.interceptions.length === 0) {
-        els.gateBox.innerHTML = `<div style="color:#86efac;">CLEARED — RefundDeskAgent proposal matched Sentinel findings on epoch ${report.finalEpoch} with zero active bank disputes.</div>`;
+        els.gateBox.innerHTML = `
+          <div class="gate-row cleared">
+            <div class="gate-header">
+              <span>CLEARED</span>
+              <span>epoch ${report.finalEpoch}</span>
+            </div>
+            <div class="gate-body">
+              RefundDeskAgent proposal matched Sentinel verification with no active bank chargebacks.
+            </div>
+          </div>
+        `;
       } else {
         els.gateBox.innerHTML = report.interceptions
           .map(
             (ic) => `
-            <div class="gate-item">
-              <div><strong>[${escapeHtml(ic.reason)}]</strong> · Action: <strong>${escapeHtml(ic.actionTaken)}</strong> · Proposal epoch ${ic.proposalEpoch} vs Current epoch ${ic.currentEpoch}</div>
-              <div style="margin-top:4px; color:var(--text);">${escapeHtml(ic.detail)}</div>
-              <div style="margin-top:4px; color:#c4b5fd;">Sources: ${ic.citedSourceIds.map(escapeHtml).join(", ")}</div>
+            <div class="gate-row blocked">
+              <div class="gate-header">
+                <span>${escapeHtml(ic.reason)}</span>
+                <span>${escapeHtml(ic.actionTaken)} (epoch ${ic.proposalEpoch} -> ${ic.currentEpoch})</span>
+              </div>
+              <div class="gate-body">${escapeHtml(ic.detail)}</div>
+              <div class="gate-sources">Sources: ${ic.citedSourceIds.map(escapeHtml).join(", ")}</div>
             </div>
           `,
           )
           .join("");
       }
 
-      // Deterministic Ledger Table
       const rowsHtml = report.ledger.lines
         .map((line) => {
-          const deltaCls = line.deltaKsh < 0 ? "delta-neg" : line.deltaKsh > 0 ? "delta-pos" : "";
-          const deltaStr = line.deltaKsh === 0 ? "KSh 0" : `${line.deltaKsh > 0 ? "+" : ""}${fmtKsh(line.deltaKsh)}`;
+          const deltaCls =
+            line.deltaKsh < 0 ? "delta-neg" : line.deltaKsh > 0 ? "delta-pos" : "delta-zero";
+          const deltaStr =
+            line.deltaKsh === 0
+              ? "KSh 0"
+              : `${line.deltaKsh > 0 ? "+" : ""}${fmtKsh(line.deltaKsh)}`;
           return `
             <tr>
-              <td><strong>${escapeHtml(line.sellerId)}</strong> <span style="color:var(--muted);">(${escapeHtml(line.sellerName)})</span></td>
+              <td>
+                <strong>${escapeHtml(line.sellerId)}</strong>
+                <span class="seller-sub">${escapeHtml(line.sellerName)}</span>
+              </td>
               <td>${fmtKsh(line.grossSalesKsh)}</td>
               <td>${fmtKsh(line.draftNetPayoutKsh)}</td>
               <td><strong>${fmtKsh(line.supportedNetPayoutKsh)}</strong></td>
@@ -572,33 +904,36 @@
         })
         .join("");
 
+      const totalDelta =
+        report.ledger.draftTotalKsh === report.ledger.supportedTotalKsh
+          ? "Unchanged (Zero-Sum)"
+          : fmtKsh(report.ledger.supportedTotalKsh - report.ledger.draftTotalKsh);
+
       const totalRow = `
-        <tr style="background:rgba(255,255,255,0.03); font-weight:700;">
-          <td>BATCH TOTAL (${escapeHtml(report.ledger.batchId)})</td>
+        <tr class="total-row">
+          <td>Batch Total (${escapeHtml(report.ledger.batchId)})</td>
           <td>${fmtKsh(report.ledger.batchGrossKsh)}</td>
           <td>${fmtKsh(report.ledger.draftTotalKsh)}</td>
           <td>${fmtKsh(report.ledger.supportedTotalKsh)}</td>
-          <td>${report.ledger.draftTotalKsh === report.ledger.supportedTotalKsh ? "SAME TOTAL (Zero-Sum)" : fmtKsh(report.ledger.supportedTotalKsh - report.ledger.draftTotalKsh)}</td>
+          <td>${totalDelta}</td>
         </tr>
       `;
       els.ledgerBody.innerHTML = rowsHtml + totalRow;
 
-      els.citationsRow.innerHTML = report.ledger.allCitations
-        .map((c) => `<span class="cite">${escapeHtml(c)}</span>`)
-        .join("");
+      els.citationsRow.style.display = "flex";
+      els.citationsRow.innerHTML =
+        `<span class="citations-label">Source records:</span>` +
+        report.ledger.allCitations.map((c) => `<span class="cite">${escapeHtml(c)}</span>`).join("");
 
-      // Baseline comparison callout
       const baseSeller = baseline.acceptedProposal?.debitSellerId ?? "none";
-      const guardSeller = report.acceptedProposal?.debitSellerId ?? "HELD / FROZEN";
+      const guardSeller = report.acceptedProposal?.debitSellerId ?? "HELD";
       const differed = baseline.verdict !== report.verdict || baseSeller !== guardSeller;
       els.baselineCallout.style.display = "block";
       els.baselineCallout.innerHTML = `
-        <strong>Single-Agent Baseline Comparison:</strong>
-        Without concurrent Sentinel + Mozaik Interception, the sequential baseline returned
-        <code>${escapeHtml(baseline.verdict)}</code> (debited <code>${escapeHtml(baseSeller)}</code>),
-        whereas RefundGuard produced <code>${escapeHtml(report.verdict)}</code> (<code>${escapeHtml(guardSeller)}</code>)
-        ${differed ? "— <strong style='color:#86efac;'>error prevented!</strong>" : "— both agreed on this clean case."}
-        <div style="margin-top:4px; color:var(--muted); font-family:var(--mono); font-size:0.75rem;">${escapeHtml(report.overlapDetail)}</div>
+        <strong>Baseline comparison:</strong>
+        Single-agent baseline returned <code>${escapeHtml(baseline.verdict)}</code> (<code>${escapeHtml(baseSeller)}</code>).
+        RefundGuard returned <code>${escapeHtml(report.verdict)}</code> (<code>${escapeHtml(guardSeller)}</code>)${differed ? ", preventing an erroneous payout." : "."}
+        <div class="overlap-line">${escapeHtml(report.overlapDetail)}</div>
       `;
     }
 
@@ -606,10 +941,11 @@
       els.runBtn.disabled = true;
       els.laneRefund.innerHTML = "";
       els.laneSentinel.innerHTML = "";
-      els.gateBox.textContent = "Running concurrent Mozaik agents…";
-      els.verdictBanner.className = "verdict-banner";
-      els.verdictTitle.textContent = "Running concurrent Mozaik loops…";
-      els.verdictSub.textContent = "RefundDeskAgent & DisputeFulfillmentSentinel active in parallel.";
+      els.gateBox.innerHTML = `<div class="gate-empty">Evaluating concurrent agent output...</div>`;
+      els.verdictBadge.className = "status-badge";
+      els.verdictBadge.textContent = "RUNNING";
+      els.verdictMeta.textContent = "";
+      els.verdictSub.textContent = "RefundDeskAgent and DisputeFulfillmentSentinel are running concurrently.";
 
       try {
         const res = await fetch("/api/run", {
@@ -649,8 +985,8 @@
           }
         }
       } catch (err) {
-        els.verdictBanner.className = "verdict-banner danger";
-        els.verdictTitle.textContent = "Run failed";
+        els.verdictBadge.className = "status-badge danger";
+        els.verdictBadge.textContent = "ERROR";
         els.verdictSub.textContent = err.message;
       } finally {
         els.runBtn.disabled = false;
@@ -659,7 +995,7 @@
 
     async function runBenchmark() {
       els.compareBtn.disabled = true;
-      els.compareBtn.textContent = "Running 5-case benchmark…";
+      els.compareBtn.textContent = "Running benchmark...";
       try {
         const res = await fetch("/api/compare");
         const { results } = await res.json();
@@ -672,7 +1008,7 @@
               <td>${escapeHtml(r.baseline.verdict)} (${escapeHtml(r.baseline.debitSellerId ?? "none")})</td>
               <td><strong>${escapeHtml(r.guard.verdict)}</strong></td>
               <td>${escapeHtml(r.guard.interceptions.join(", ") || "none")}</td>
-              <td>${r.guard.concurrentOverlapVerified ? "YES" : "NO"}</td>
+              <td>${r.guard.concurrentOverlapVerified ? "Yes" : "No"}</td>
             </tr>
           `,
           )
@@ -680,7 +1016,7 @@
         els.compareCard.scrollIntoView({ behavior: "smooth" });
       } finally {
         els.compareBtn.disabled = false;
-        els.compareBtn.textContent = "Run 5-Case Baseline Benchmark";
+        els.compareBtn.textContent = "Run 5-Case Benchmark";
       }
     }
 
@@ -688,15 +1024,14 @@
       const res = await fetch("/api/scenarios");
       const data = await res.json();
       state.scenarios = data.scenarios;
-      els.modeBadge.textContent = `${data.mode.toUpperCase()} · ${data.model}`;
-      els.modeBadge.className = `pill ${data.mode}`;
+      els.modeBadge.textContent = `${data.mode}: ${data.model}`;
 
       els.scenarioList.innerHTML = data.scenarios
         .map(
           (s) => `
           <button class="scenario-btn" data-id="${escapeHtml(s.id)}">
-            <div class="title">${escapeHtml(s.title)}</div>
-            <div class="desc">${escapeHtml(s.summary)}</div>
+            <div class="s-title">${escapeHtml(s.title)}</div>
+            <div class="s-desc">${escapeHtml(s.summary)}</div>
           </button>
         `,
         )
@@ -711,13 +1046,13 @@
           const p = presetBtn.dataset.preset;
           if (p === "seller-a") {
             els.warehouseNote.value =
-              "Kisumu Returns Hub — Opened box for CHK-402: confirmed 1x Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). No boots in parcel.";
+              "Kisumu Returns Hub: opened box for CHK-402. Confirmed 1x Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). No boots in parcel.";
           } else if (p === "seller-b") {
             els.warehouseNote.value =
-              "Kisumu Returns Hub — Opened box for CHK-402: confirmed 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear / Seller B). Jacket was NOT returned.";
+              "Kisumu Returns Hub: opened box for CHK-402. Confirmed 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear / Seller B). Jacket was NOT returned.";
           } else if (p === "missing") {
             els.warehouseNote.value =
-              "Kisumu Returns Hub — No parcel received yet for CHK-402; courier waybill shows label created only, contents unverified.";
+              "Kisumu Returns Hub: no parcel received yet for CHK-402. Courier waybill shows label created only; contents unverified.";
           }
         });
       }
@@ -735,7 +1070,6 @@
         a.click();
       });
 
-      // Default to Case 2 (Wrong-Seller Zero-Sum Trap) — instant hook!
       selectScenario("case-2-wrong-seller-zerosum");
       runSelected();
     }

@@ -277,9 +277,9 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
       warehouseNote: {
         noteId: "WH-404-V2",
         receivedAt: "2026-11-26T14:23:05+03:00",
-        hub: "Kisumu Returns Hub — QC Bench",
+        hub: "Kisumu Returns Hub (QC Bench)",
         supersedesNoteId: "WH-404-V1",
-        text: "CORRECTION superseding WH-404-V1: Opened the shoebox at QC bench — inside is actually the Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A)! Customer reused the boot box; boots were NOT returned.",
+        text: "CORRECTION superseding WH-404-V1: Opened the shoebox at QC bench. Inside is actually the Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Customer reused the boot box; boots were NOT returned.",
       },
     },
   },
@@ -324,7 +324,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
       submittedAt: "2026-11-26T14:30:00+03:00",
       requestedRefundKsh: 10_000,
       message:
-        "Black Friday urgent: my navy quilted jacket from CHK-402 arrived defective and I returned it—please issue my KSh 10,000 refund immediately!",
+        "Black Friday urgent: my navy quilted jacket from CHK-402 arrived defective and I returned it. Please issue my KSh 10,000 refund immediately.",
     },
     initialWarehouseNote: {
       noteId: "WH-505",

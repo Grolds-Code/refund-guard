@@ -111,7 +111,7 @@ export async function runRefundGuardCase(
     }, delayMs);
   }
 
-  // Publish `case.opened` — Mozaik fans it out synchronously to BOTH agents,
+  // Publish `case.opened`. Mozaik fans it out synchronously to both agents,
   // launching two concurrent non-blocking runLoops immediately.
   runtime.sendEvent(
     SemanticEvent.create("case.opened", coordinator.getId(), {
@@ -233,7 +233,7 @@ export function buildInjectedWarehouseCorrection(
   return {
     noteId: `WH-CORR-${Date.now().toString().slice(-4)}`,
     receivedAt: new Date().toISOString(),
-    hub: "Kisumu Returns Hub — Live QC Override",
+    hub: "Kisumu Returns Hub (Live QC Override)",
     supersedesNoteId: scenario.initialWarehouseNote.noteId,
     text: `CORRECTION superseding ${scenario.initialWarehouseNote.noteId}: Bench inspection confirmed physical return is ${itemText}`,
   };

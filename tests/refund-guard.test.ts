@@ -3,7 +3,7 @@ import { getScenarioById } from "../src/finance/fixtures.js";
 import { runSingleAgentBaseline } from "../src/engine/baseline.js";
 import { runRefundGuardCase } from "../src/engine/run-case.js";
 
-describe("RefundGuard — Concurrent Mozaik Interception Suite", () => {
+describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
   it("Case 1: clears a verified allocation cleanly (A: KSh 50,000 / B: KSh 40,000, Total KSh 90,000)", async () => {
     const scenario = getScenarioById("case-1-clean-allocation");
     const report = await runRefundGuardCase(scenario, {
@@ -111,7 +111,7 @@ describe("RefundGuard — Concurrent Mozaik Interception Suite", () => {
       modeOverride: "mock",
       latencyScale: 0.4,
       customWarehouseNoteText:
-        "Kisumu Hub intake — Confirmed return of 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear). Jacket was NOT returned.",
+        "Kisumu Hub intake: confirmed return of 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear). Jacket was NOT returned.",
     });
 
     expect(flipped.verdict).toBe("READY_FOR_HUMAN_APPROVAL");

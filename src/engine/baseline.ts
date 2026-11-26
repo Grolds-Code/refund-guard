@@ -205,7 +205,7 @@ export async function runSingleAgentBaseline(
     finalEpoch: state.epoch,
     durationMs: state.elapsedMs(),
     concurrentOverlapVerified: false,
-    overlapDetail: "Single sequential agent — no concurrent peer agent.",
+    overlapDetail: "Single sequential agent: no concurrent peer agent.",
     sentinelFinding: null,
     acceptedProposal: state.acceptedProposal,
     interceptions: [],

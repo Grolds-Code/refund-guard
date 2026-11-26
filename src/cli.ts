@@ -7,7 +7,7 @@ async function main(): Promise<void> {
   const arg = process.argv[2];
   const targets = arg ? [getScenarioById(arg)] : SCENARIOS;
 
-  console.log("=== RefundGuard — Concurrent Mozaik Review CLI ===\n");
+  console.log("=== RefundGuard: Concurrent Mozaik Review CLI ===\n");
 
   for (const scenario of targets) {
     const report = await runRefundGuardCase(scenario, { latencyScale: 0.6 });
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
     console.log(`[${scenario.id}] ${scenario.title}`);
     console.log(`  Mode:        ${report.mode} | Duration: ${report.durationMs}ms | Final Epoch: ${report.finalEpoch}`);
     console.log(`  Verdict:     ${report.verdict}`);
-    console.log(`  Concurrency: ${report.concurrentOverlapVerified ? "VERIFIED" : "NONE"} — ${report.overlapDetail}`);
+    console.log(`  Concurrency: ${report.concurrentOverlapVerified ? "VERIFIED" : "NONE"} (${report.overlapDetail})`);
     console.log(`  Interceptions: ${report.interceptions.length} (${report.interceptions.map((i) => i.reason).join(", ") || "none"})`);
     console.log(
       `  Draft:       A ${formatKsh(sellerA.draftNetPayoutKsh)} / B ${formatKsh(sellerB.draftNetPayoutKsh)} (Total ${formatKsh(report.ledger.draftTotalKsh)})`,
