@@ -1,6 +1,8 @@
 import {
   Agent,
   createAgent,
+  DeveloperMessageItem,
+  ModelContext,
   SituationSpecification,
   type SituationContext,
   type SituationHandler,
@@ -15,15 +17,19 @@ class WhenEvidenceNeedsAudit extends SituationSpecification {
   }
 }
 
+const SENTINEL_INSTRUCTION =
+  "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and asynchronous issuing-bank dispute webhooks. Only flag DISPUTE_COLLISION when an OPEN dispute matches the original payment (card last-4, checkout/settlement ref, and amount within capture). If a dispute only partially matches the payment, publish status=DISPUTE_AMBIGUOUS for human verification. Ignore unrelated or closed disputes. Otherwise determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived or contents are unverified/ambiguous, publish status=MISSING_OR_AMBIGUOUS. Always call `publish_sentinel_finding` with the exact CURRENT_EPOCH and source IDs.";
+
 export function createSentinelAgent(
   runtime: RefundGuardRuntimeApi,
   state: RefundGuardState,
 ): Agent {
+  // Provider-portable tool schema (avoids nullable array types rejected by strict LLM validators)
   const publishFindingTool: Tool = {
     type: "function",
     name: "publish_sentinel_finding",
     description:
-      "Publish verified warehouse return attribution or PSP chargeback collision findings to shared RuntimeState for the specified epoch.",
+      "Publish verified warehouse return attribution or PSP dispute findings to shared RuntimeState for the specified epoch. Use 'NONE' when a seller, line, or dispute ID does not apply.",
     strict: false,
     parameters: {
       type: "object",
@@ -31,11 +37,19 @@ export function createSentinelAgent(
         epoch: { type: "number" },
         status: {
           type: "string",
-          enum: ["VERIFIED_RETURN", "MISSING_OR_AMBIGUOUS", "DISPUTE_COLLISION"],
+          enum: [
+            "VERIFIED_RETURN",
+            "MISSING_OR_AMBIGUOUS",
+            "DISPUTE_COLLISION",
+            "DISPUTE_AMBIGUOUS",
+          ],
         },
-        verifiedSellerId: { type: ["string", "null"], enum: ["SELLER-A", "SELLER-B", null] },
-        verifiedLineId: { type: ["string", "null"] },
-        disputeId: { type: ["string", "null"] },
+        verifiedSellerId: {
+          type: "string",
+          enum: ["SELLER-A", "SELLER-B", "NONE"],
+        },
+        verifiedLineId: { type: "string" },
+        disputeId: { type: "string" },
         evidenceNoteId: { type: "string" },
         confidence: { type: "string", enum: ["HIGH", "LOW"] },
         summary: { type: "string" },
@@ -57,7 +71,7 @@ export function createSentinelAgent(
     invoke: async (args: {
       epoch: number;
       status: SentinelEvidenceStatus;
-      verifiedSellerId: SellerId | null;
+      verifiedSellerId: SellerId | "NONE" | null;
       verifiedLineId: string | null;
       disputeId: string | null;
       evidenceNoteId: string;
@@ -65,12 +79,21 @@ export function createSentinelAgent(
       summary: string;
       citedSourceIds: string[];
     }) => {
+      const normalizedSeller: SellerId | null =
+        args.verifiedSellerId === "SELLER-A" || args.verifiedSellerId === "SELLER-B"
+          ? args.verifiedSellerId
+          : null;
+      const normalizedLine =
+        args.verifiedLineId && args.verifiedLineId !== "NONE" ? args.verifiedLineId : null;
+      const normalizedDispute =
+        args.disputeId && args.disputeId !== "NONE" ? args.disputeId : null;
+
       const finding = {
         epoch: args.epoch,
         status: args.status,
-        verifiedSellerId: args.verifiedSellerId,
-        verifiedLineId: args.verifiedLineId,
-        disputeId: args.disputeId,
+        verifiedSellerId: normalizedSeller,
+        verifiedLineId: normalizedLine,
+        disputeId: normalizedDispute,
         evidenceNoteId: args.evidenceNoteId,
         confidence: args.confidence,
         summary: args.summary,
@@ -90,53 +113,65 @@ export function createSentinelAgent(
 
         const targetEpoch = state.epoch;
         const latestNote = state.getLatestWarehouseNote();
-        const latestChargeback = state.getLatestChargeback();
+        const relevantDispute = state.getLatestRelevantChargeback();
         const s = state.scenario;
 
         const prompt = [
-          "Audit the latest physical warehouse intake notes and any asynchronous PSP chargeback webhooks, then call `publish_sentinel_finding`.",
+          "Audit the latest physical warehouse intake notes and any linked PSP dispute webhooks, then call `publish_sentinel_finding`.",
           `TRIGGER_EVENT: ${event.type}`,
           `CURRENT_EPOCH: ${targetEpoch}`,
           `CHECKOUT_ID: ${s.checkoutId}`,
           "ORDER_LINES:",
           ...s.orderLines.map(
-            (l) => `- ${l.lineId} | ${l.sellerId} (${s.sellers[l.sellerId].name}) | SKU ${l.sku} | ${l.itemTitle} | KSh ${l.amountKsh}`,
+            (l) =>
+              `- ${l.lineId} | ${l.sellerId} (${s.sellers[l.sellerId].name}) | SKU ${l.sku} | ${l.itemTitle} | KSh ${l.amountKsh}`,
           ),
           "SETTLEMENTS:",
           ...s.settlements.map(
-            (st) => `- ${st.settlementId} | ${st.kind} | KSh ${st.amountKsh} | card ending ${st.cardLast4}`,
+            (st) =>
+              `- ${st.settlementId} | ${st.kind} | KSh ${st.amountKsh} | card ending ${st.cardLast4}`,
           ),
           `WAREHOUSE_NOTE_ID: ${latestNote.noteId}`,
           `WAREHOUSE_HUB: ${latestNote.hub}`,
           "WAREHOUSE_NOTE_TEXT:",
           latestNote.text,
           "CHARGEBACK_SECTION:",
-          latestChargeback
+          relevantDispute
             ? [
-                `DISPUTE_ID: ${latestChargeback.disputeId}`,
-                `REASON_CODE: ${latestChargeback.reasonCode}`,
-                `CARD_LAST4: ${latestChargeback.cardLast4}`,
-                `PSP_REF_SUFFIX: ${latestChargeback.pspReferenceSuffix}`,
-                `AMOUNT_KSH: ${latestChargeback.amountKsh}`,
-                `NARRATIVE: ${latestChargeback.narrative}`,
+                `DISPUTE_ID: ${relevantDispute.chargeback.disputeId}`,
+                `DISPUTE_STATUS: ${relevantDispute.chargeback.status}`,
+                `MATCH_STATE: ${relevantDispute.evaluation.matchState}`,
+                `REASON_CODE: ${relevantDispute.chargeback.reasonCode}`,
+                `CARD_LAST4: ${relevantDispute.chargeback.cardLast4}`,
+                `PSP_REF_SUFFIX: ${relevantDispute.chargeback.pspReferenceSuffix}`,
+                `AMOUNT_KSH: ${relevantDispute.chargeback.amountKsh}`,
+                `NARRATIVE: ${relevantDispute.chargeback.narrative}`,
               ].join("\n")
             : "NONE",
           "END_EVIDENCE",
-          "Call publish_sentinel_finding now with exact source IDs.",
+          "Call publish_sentinel_finding now with exact source IDs (use 'NONE' for inapplicable IDs).",
         ].join("\n");
 
-        state.sentinelPendingCount += 1;
-        state.sentinelWindows.push({ startedAtMs: Date.now() });
+        state.notifySentinelLoopStarted();
         state.recordEvent(
           "agent.loop_started",
           "DisputeFulfillmentSentinel",
-          `Started concurrent evidence audit loop (epoch ${targetEpoch}, note ${latestNote.noteId}${latestChargeback ? `, dispute ${latestChargeback.disputeId}` : ""}).`,
+          `Started concurrent evidence audit loop (epoch ${targetEpoch}, note ${latestNote.noteId}${relevantDispute ? `, dispute ${relevantDispute.chargeback.disputeId} [${relevantDispute.evaluation.matchState}]` : ""}).`,
           { epoch: targetEpoch, trigger: event.type },
         );
 
+        // Fresh ModelContext per evidence epoch avoids overlapping tool-call histories
+        // if an update arrives while an earlier Sentinel loop is still settling.
+        const context =
+          event.type === "evidence.updated"
+            ? ModelContext.create().addContextItem(
+                DeveloperMessageItem.create(SENTINEL_INSTRUCTION),
+              )
+            : participant.getMemory().getContext();
+
         runtime.runLoop(participant.getId(), prompt, {
           model: state.modelName,
-          context: participant.getMemory().getContext(),
+          context,
           tools: participant.getTools(),
         });
       },
@@ -146,8 +181,7 @@ export function createSentinelAgent(
   return createAgent({
     name: "DisputeFulfillmentSentinel",
     capabilities: ["warehouse-inspection", "chargeback-correlation", "evidence-grounding"],
-    instruction:
-      "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and asynchronous issuing-bank chargeback narratives. First check if any bank chargeback collides with the checkout (even if external IDs differ, match by card last-4, checkout suffix, amount, and item description); if so, publish status=DISPUTE_COLLISION. Otherwise, determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived or contents are unverified/ambiguous, publish status=MISSING_OR_AMBIGUOUS. Always call `publish_sentinel_finding` with the exact CURRENT_EPOCH and source IDs.",
+    instruction: SENTINEL_INSTRUCTION,
     tools: [publishFindingTool],
     handlers: [onEvidenceEvent],
   });

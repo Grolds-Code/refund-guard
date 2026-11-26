@@ -54,20 +54,20 @@ export function createAuditObserver(
           const text = payload?.answer?.content?.text ?? "";
 
           if (event.producerId === refundDeskId) {
-            const latestWindow = state.refundDeskWindows[state.refundDeskWindows.length - 1];
-            if (latestWindow && !latestWindow.endedAtMs) {
-              latestWindow.endedAtMs = Date.now();
+            const openWindow = state.refundDeskWindows.find((w) => !w.endedAtMs);
+            if (openWindow) {
+              openWindow.endedAtMs = Date.now();
             }
             state.recordEvent(
               "agent.completed",
               "RefundDeskAgent",
               text.slice(0, 220) || "RefundDeskAgent loop completed.",
             );
-            state.markRefundDeskFinished();
+            state.notifyRefundDeskLoopSettled();
           } else if (event.producerId === sentinelId) {
-            const latestWindow = state.sentinelWindows[state.sentinelWindows.length - 1];
-            if (latestWindow && !latestWindow.endedAtMs) {
-              latestWindow.endedAtMs = Date.now();
+            const openWindow = state.sentinelWindows.find((w) => !w.endedAtMs);
+            if (openWindow) {
+              openWindow.endedAtMs = Date.now();
             }
             state.recordEvent(
               "agent.completed",

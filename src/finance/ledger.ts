@@ -1,4 +1,5 @@
 import type {
+  DisputeMatchEvaluation,
   FinalVerdict,
   GroundedAllocationLine,
   GroundedLedgerResult,
@@ -13,12 +14,25 @@ const SELLER_IDS: readonly SellerId[] = ["SELLER-A", "SELLER-B"];
  * Pure deterministic financial calculator.
  * Zero floating point, zero LLM arithmetic. Every shilling is derived strictly
  * from immutable source records and carries explicit provenance IDs.
+ *
+ * Hold Policy:
+ * - Approved verdicts (`READY_FOR_HUMAN_APPROVAL`, `CORRECTED_READY_FOR_APPROVAL`):
+ *   release full net batch; deduct confirmed refund only from the verified seller.
+ * - Active dispute collision (`FROZEN_DISPUTE_COLLISION`) with an identified seller line:
+ *   block the unsafe KSh 10,000 cross-system refund proposal and hold only the disputed
+ *   seller's checkout line (KSh 10,000) in reserve while leaving the undisputed seller clear.
+ * - Missing evidence, ambiguous dispute match, or pending revalidation
+ *   (`HOLD_MISSING_EVIDENCE`, `VERIFY_DISPUTE_MATCH`, `PENDING_REVALIDATION`):
+ *   seller liability across the checkout is unresolved, so hold both checkout lines
+ *   (KSh 20,000 total reserve across Seller A and Seller B) rather than risking paying the
+ *   wrong seller. Requested refund amount (KSh 10,000) is always reported separately.
  */
 export function computeGroundedLedger(
   scenario: ScenarioFixture,
   verdict: FinalVerdict,
   supportedDebitSellerId: SellerId | null,
   sentinelFinding: SentinelFinding | null,
+  disputeEvaluation: DisputeMatchEvaluation | null = null,
 ): GroundedLedgerResult {
   const captureSettlements = scenario.settlements.filter((s) => s.kind === "CAPTURE");
   const refundSettlements = scenario.settlements.filter((s) => s.kind === "REFUND");
@@ -30,6 +44,7 @@ export function computeGroundedLedger(
   );
   const batchGrossKsh = priorBatchGrossKsh + checkoutCaptureKsh;
   const confirmedRefundKsh = refundSettlements.reduce((sum, s) => sum + s.amountKsh, 0);
+  const requestedRefundKsh = scenario.ticket.requestedRefundKsh;
   const netBatchTotalKsh = batchGrossKsh - confirmedRefundKsh;
 
   const draftTotalKsh = scenario.draft.sellerLines.reduce(
@@ -37,10 +52,17 @@ export function computeGroundedLedger(
     0,
   );
 
-  // Determine the exact refund deduction supported by verified evidence
   const refundAmount = scenario.draft.refundAmountKsh;
-  const isBlocked =
-    verdict === "HOLD_MISSING_EVIDENCE" || verdict === "FROZEN_DISPUTE_COLLISION";
+  const isApproved =
+    verdict === "READY_FOR_HUMAN_APPROVAL" ||
+    verdict === "CORRECTED_READY_FOR_APPROVAL";
+
+  // For a verified active dispute where the disputed seller line is known (e.g., Seller A's
+  // jacket), hold only that seller's disputed line (KSh 10,000) rather than both sellers.
+  const knownDisputedSellerId: SellerId | null =
+    verdict === "FROZEN_DISPUTE_COLLISION"
+      ? (sentinelFinding?.verifiedSellerId ?? scenario.draft.debitedSellerId)
+      : null;
 
   const baseCitations = [
     scenario.draft.draftId,
@@ -64,24 +86,17 @@ export function computeGroundedLedger(
       throw new Error(`Missing payout draft line for ${sellerId} in ${scenario.id}`);
     }
 
-    // If blocked (missing evidence or chargeback collision), hold the disputed refund
-    // line from payout release rather than guessing which seller absorbs it.
     let supportedDeductionKsh: number;
-    if (isBlocked) {
-      supportedDeductionKsh = 0;
-    } else {
+    if (isApproved) {
       supportedDeductionKsh = supportedDebitSellerId === sellerId ? refundAmount : 0;
+    } else if (verdict === "FROZEN_DISPUTE_COLLISION" && knownDisputedSellerId !== null) {
+      supportedDeductionKsh = sellerId === knownDisputedSellerId ? checkoutSalesKsh : 0;
+    } else {
+      // Unresolved seller attribution: hold this seller's unsettled checkout line in reserve.
+      supportedDeductionKsh = checkoutSalesKsh;
     }
 
-    const supportedNetPayoutKsh = isBlocked
-      ? grossSalesKsh - (sellerId === scenario.draft.debitedSellerId ? refundAmount : 0)
-      : grossSalesKsh - supportedDeductionKsh;
-
-    // When blocked, we freeze the disputed KSh 10,000 release so neither seller receives
-    // unverified funds for the disputed checkout line.
-    const finalSupportedNet = isBlocked
-      ? grossSalesKsh - checkoutSalesKsh
-      : supportedNetPayoutKsh;
+    const supportedNetPayoutKsh = grossSalesKsh - supportedDeductionKsh;
 
     const citations = new Set<string>([
       ...baseCitations,
@@ -92,6 +107,13 @@ export function computeGroundedLedger(
         citations.add(id);
       }
     }
+    if (
+      disputeEvaluation &&
+      (disputeEvaluation.matchState === "VERIFIED_ACTIVE_MATCH" ||
+        disputeEvaluation.matchState === "AMBIGUOUS_MATCH")
+    ) {
+      citations.add(disputeEvaluation.disputeId);
+    }
 
     return {
       sellerId,
@@ -99,30 +121,45 @@ export function computeGroundedLedger(
       grossSalesKsh,
       draftDeductionKsh: draftLine.refundDeductionKsh,
       draftNetPayoutKsh: draftLine.netPayoutKsh,
-      supportedDeductionKsh: isBlocked ? checkoutSalesKsh : supportedDeductionKsh,
-      supportedNetPayoutKsh: finalSupportedNet,
-      deltaKsh: finalSupportedNet - draftLine.netPayoutKsh,
+      supportedDeductionKsh,
+      supportedNetPayoutKsh,
+      deltaKsh: supportedNetPayoutKsh - draftLine.netPayoutKsh,
       citations: [...citations],
     };
   });
 
   const supportedTotalKsh = lines.reduce((sum, l) => sum + l.supportedNetPayoutKsh, 0);
 
-  // Zero-sum seller misallocation caught: when draft charged the wrong seller
-  // while keeping total payout equal to net batch settlement.
   const misallocationCaughtKsh =
-    !isBlocked &&
+    isApproved &&
     supportedDebitSellerId !== null &&
     supportedDebitSellerId !== scenario.draft.debitedSellerId
       ? refundAmount
       : 0;
 
-  // Double payout prevented: when an external bank chargeback already locks the
-  // refund amount and RefundGuard halts the duplicate store refund.
-  const doublePayoutPreventedKsh =
-    verdict === "FROZEN_DISPUTE_COLLISION" ? scenario.ticket.requestedRefundKsh : 0;
+  const blockedUnsafeRefundKsh =
+    verdict === "FROZEN_DISPUTE_COLLISION" ? requestedRefundKsh : 0;
 
-  const heldAmountKsh = isBlocked ? Math.max(0, draftTotalKsh - supportedTotalKsh) : 0;
+  // Held reserve is the exact portion of checkout capture withheld from payout release.
+  const heldReserveKsh = isApproved
+    ? 0
+    : Math.max(0, batchGrossKsh - confirmedRefundKsh - supportedTotalKsh);
+
+  let holdPolicyExplanation: string;
+  if (isApproved) {
+    holdPolicyExplanation =
+      misallocationCaughtKsh > 0
+        ? `Batch total remains ${formatKsh(supportedTotalKsh)}; ${formatKsh(misallocationCaughtKsh)} refund deduction reallocated to verified seller ${supportedDebitSellerId}.`
+        : `No reserve held; ${formatKsh(supportedTotalKsh)} cleared for human approval.`;
+  } else if (verdict === "FROZEN_DISPUTE_COLLISION" && knownDisputedSellerId) {
+    holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (${knownDisputedSellerId}'s disputed checkout line held while active dispute is open; undisputed seller payout remains clear).`;
+  } else if (verdict === "VERIFY_DISPUTE_MATCH") {
+    holdPolicyExplanation = `Requested refund: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (both checkout lines held pending operator verification of ambiguous dispute match).`;
+  } else if (verdict === "PENDING_REVALIDATION") {
+    holdPolicyExplanation = `Requested refund: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (prior approval invalidated by newer evidence epoch; revalidation pending).`;
+  } else {
+    holdPolicyExplanation = `Requested refund: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (unsettled checkout lines held because physical return attribution is unverified).`;
+  }
 
   const allCitations = new Set<string>();
   for (const line of lines) {
@@ -136,13 +173,15 @@ export function computeGroundedLedger(
     checkoutId: scenario.checkoutId,
     batchGrossKsh,
     confirmedRefundKsh,
+    requestedRefundKsh,
     netBatchTotalKsh,
     draftTotalKsh,
     supportedTotalKsh,
     totalStillMatchesExactly: draftTotalKsh === netBatchTotalKsh,
     misallocationCaughtKsh,
-    doublePayoutPreventedKsh,
-    heldAmountKsh,
+    blockedUnsafeRefundKsh,
+    heldReserveKsh,
+    holdPolicyExplanation,
     lines,
     allCitations: [...allCitations],
   };

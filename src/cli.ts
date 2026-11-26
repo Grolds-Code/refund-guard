@@ -15,10 +15,16 @@ async function main(): Promise<void> {
     const sellerB = report.ledger.lines.find((l) => l.sellerId === "SELLER-B")!;
 
     console.log(`[${scenario.id}] ${scenario.title}`);
-    console.log(`  Mode:        ${report.mode} | Duration: ${report.durationMs}ms | Final Epoch: ${report.finalEpoch}`);
+    console.log(
+      `  Mode:        ${report.mode} (${report.modelName}) | Duration: ${report.durationMs}ms | Final Epoch: ${report.finalEpoch}`,
+    );
     console.log(`  Verdict:     ${report.verdict}`);
-    console.log(`  Concurrency: ${report.concurrentOverlapVerified ? "VERIFIED" : "NONE"} (${report.overlapDetail})`);
-    console.log(`  Interceptions: ${report.interceptions.length} (${report.interceptions.map((i) => i.reason).join(", ") || "none"})`);
+    console.log(
+      `  Concurrency: ${report.concurrentOverlapVerified ? "VERIFIED" : "NONE"} (${report.overlapDetail})`,
+    );
+    console.log(
+      `  Interceptions: ${report.interceptions.length} (${report.interceptions.map((i) => i.reason).join(", ") || "none"})`,
+    );
     console.log(
       `  Draft:       A ${formatKsh(sellerA.draftNetPayoutKsh)} / B ${formatKsh(sellerB.draftNetPayoutKsh)} (Total ${formatKsh(report.ledger.draftTotalKsh)})`,
     );
@@ -26,8 +32,9 @@ async function main(): Promise<void> {
       `  Supported:   A ${formatKsh(sellerA.supportedNetPayoutKsh)} / B ${formatKsh(sellerB.supportedNetPayoutKsh)} (Total ${formatKsh(report.ledger.supportedTotalKsh)})`,
     );
     console.log(
-      `  Protection:  Misallocation caught=${formatKsh(report.ledger.misallocationCaughtKsh)} | Double-payout blocked=${formatKsh(report.ledger.doublePayoutPreventedKsh)} | Held=${formatKsh(report.ledger.heldAmountKsh)}`,
+      `  Amounts:     Requested refund=${formatKsh(report.ledger.requestedRefundKsh)} | Misallocation caught=${formatKsh(report.ledger.misallocationCaughtKsh)} | Unsafe refund blocked=${formatKsh(report.ledger.blockedUnsafeRefundKsh)} | Reserve held=${formatKsh(report.ledger.heldReserveKsh)}`,
     );
+    console.log(`  Policy:      ${report.ledger.holdPolicyExplanation}`);
     console.log(`  Citations:   ${report.ledger.allCitations.join(", ")}\n`);
   }
 }

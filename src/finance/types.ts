@@ -64,14 +64,33 @@ export interface WarehouseNoteRecord {
   readonly supersedesNoteId?: string;
 }
 
+export type DisputeStatus = "OPEN" | "CLOSED_WON" | "CLOSED_LOST" | "WITHDRAWN";
+
 export interface ChargebackWebhookRecord {
   readonly disputeId: string;
+  readonly status: DisputeStatus;
   readonly receivedAt: string;
   readonly pspReferenceSuffix: string;
+  readonly paymentSettlementId?: string;
   readonly cardLast4: string;
   readonly amountKsh: number;
   readonly reasonCode: string;
   readonly narrative: string;
+}
+
+export type DisputeMatchState =
+  | "VERIFIED_ACTIVE_MATCH"
+  | "AMBIGUOUS_MATCH"
+  | "UNRELATED"
+  | "INACTIVE";
+
+export interface DisputeMatchEvaluation {
+  readonly disputeId: string;
+  readonly status: DisputeStatus;
+  readonly matchState: DisputeMatchState;
+  readonly matchedSignals: readonly string[];
+  readonly mismatchedSignals: readonly string[];
+  readonly reason: string;
 }
 
 export interface MidFlightInjection {
@@ -103,7 +122,8 @@ export interface ScenarioFixture {
 export type SentinelEvidenceStatus =
   | "VERIFIED_RETURN"
   | "MISSING_OR_AMBIGUOUS"
-  | "DISPUTE_COLLISION";
+  | "DISPUTE_COLLISION"
+  | "DISPUTE_AMBIGUOUS";
 
 export interface SentinelFinding {
   readonly epoch: number;
@@ -131,7 +151,8 @@ export type InterceptionReason =
   | "WRONG_SELLER_ALLOCATION"
   | "MISSING_EVIDENCE"
   | "SUPERSEDED_EVIDENCE"
-  | "DOUBLE_PAYOUT_BLOCKED";
+  | "UNSAFE_CROSS_SYSTEM_REFUND_BLOCKED"
+  | "AMBIGUOUS_DISPUTE_MATCH";
 
 export interface InterceptionRecord {
   readonly timestampMs: number;
@@ -149,7 +170,9 @@ export type FinalVerdict =
   | "READY_FOR_HUMAN_APPROVAL"
   | "CORRECTED_READY_FOR_APPROVAL"
   | "HOLD_MISSING_EVIDENCE"
-  | "FROZEN_DISPUTE_COLLISION";
+  | "FROZEN_DISPUTE_COLLISION"
+  | "VERIFY_DISPUTE_MATCH"
+  | "PENDING_REVALIDATION";
 
 export interface GroundedAllocationLine {
   readonly sellerId: SellerId;
@@ -168,13 +191,15 @@ export interface GroundedLedgerResult {
   readonly checkoutId: string;
   readonly batchGrossKsh: number;
   readonly confirmedRefundKsh: number;
+  readonly requestedRefundKsh: number;
   readonly netBatchTotalKsh: number;
   readonly draftTotalKsh: number;
   readonly supportedTotalKsh: number;
   readonly totalStillMatchesExactly: boolean;
   readonly misallocationCaughtKsh: number;
-  readonly doublePayoutPreventedKsh: number;
-  readonly heldAmountKsh: number;
+  readonly blockedUnsafeRefundKsh: number;
+  readonly heldReserveKsh: number;
+  readonly holdPolicyExplanation: string;
   readonly lines: readonly GroundedAllocationLine[];
   readonly allCitations: readonly string[];
 }
@@ -193,14 +218,20 @@ export interface CaseRunReport {
   readonly scenarioId: string;
   readonly scenarioTitle: string;
   readonly mode: "live" | "mock";
-  readonly architecture: "refund-guard-concurrent" | "single-agent-baseline";
+  readonly modelName: string;
+  readonly architecture:
+    | "refund-guard-concurrent"
+    | "ticket-and-draft-baseline"
+    | "single-agent-snapshot-baseline";
   readonly verdict: FinalVerdict;
   readonly finalEpoch: number;
   readonly durationMs: number;
   readonly concurrentOverlapVerified: boolean;
   readonly overlapDetail: string;
   readonly sentinelFinding: SentinelFinding | null;
+  readonly disputeEvaluation: DisputeMatchEvaluation | null;
   readonly acceptedProposal: ProposedRefundAction | null;
+  readonly supersededProposals: readonly ProposedRefundAction[];
   readonly interceptions: readonly InterceptionRecord[];
   readonly ledger: GroundedLedgerResult;
   readonly timeline: readonly TimelineEntry[];

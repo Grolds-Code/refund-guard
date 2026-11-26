@@ -1,41 +1,37 @@
 import "dotenv/config";
 import { SCENARIOS } from "./finance/fixtures.js";
-import { formatKsh } from "./finance/ledger.js";
 import type { CaseRunReport, FinalVerdict, SellerId } from "./finance/types.js";
-import { runSingleAgentBaseline } from "./engine/baseline.js";
+import {
+  runSingleAgentSnapshotBaseline,
+  runTicketAndDraftBaseline,
+} from "./engine/baseline.js";
 import { runRefundGuardCase } from "./engine/run-case.js";
 
 interface GroundTruth {
   expectedVerdict: FinalVerdict;
   expectedDebitSeller: SellerId | null;
-  exposureIfWrongKsh: number;
 }
 
 const GROUND_TRUTH: Record<string, GroundTruth> = {
   "case-1-clean-allocation": {
     expectedVerdict: "READY_FOR_HUMAN_APPROVAL",
     expectedDebitSeller: "SELLER-A",
-    exposureIfWrongKsh: 10_000,
   },
   "case-2-wrong-seller-zerosum": {
     expectedVerdict: "CORRECTED_READY_FOR_APPROVAL",
     expectedDebitSeller: "SELLER-A",
-    exposureIfWrongKsh: 10_000,
   },
   "case-3-missing-evidence": {
     expectedVerdict: "HOLD_MISSING_EVIDENCE",
     expectedDebitSeller: null,
-    exposureIfWrongKsh: 10_000,
   },
   "case-4-late-correction-midflight": {
     expectedVerdict: "CORRECTED_READY_FOR_APPROVAL",
     expectedDebitSeller: "SELLER-A",
-    exposureIfWrongKsh: 10_000,
   },
   "case-5-chargeback-collision": {
     expectedVerdict: "FROZEN_DISPUTE_COLLISION",
     expectedDebitSeller: null,
-    exposureIfWrongKsh: 10_000,
   },
 };
 
@@ -51,53 +47,58 @@ function isCorrectOutcome(report: CaseRunReport, truth: GroundTruth): boolean {
   );
 }
 
-async function main(): Promise<void> {
-  console.log("=== RefundGuard vs. Single-Agent Sequential Baseline ===\n");
+function formatOutcome(report: CaseRunReport, ok: boolean): string {
+  const detail = report.acceptedProposal?.debitSellerId ?? report.verdict;
+  return `${ok ? "PASS" : "FAIL"} (${detail})`;
+}
 
-  let baselinePassed = 0;
+async function main(): Promise<void> {
+  console.log("=== RefundGuard Benchmark: Ticket-and-Draft vs. Single-Agent Snapshot vs. Concurrent RefundGuard ===\n");
+
+  let ticketDraftPassed = 0;
+  let snapshotPassed = 0;
   let guardPassed = 0;
-  let baselineLeakedKsh = 0;
-  let guardLeakedKsh = 0;
   let guardOverlapCount = 0;
 
   const rows: Array<Record<string, string>> = [];
 
   for (const scenario of SCENARIOS) {
     const truth = GROUND_TRUTH[scenario.id];
-    const [baseline, guard] = await Promise.all([
-      runSingleAgentBaseline(scenario, { latencyScale: 0.5 }),
+    const [ticketDraft, snapshot, guard] = await Promise.all([
+      runTicketAndDraftBaseline(scenario, { latencyScale: 0.5 }),
+      runSingleAgentSnapshotBaseline(scenario, { latencyScale: 0.5 }),
       runRefundGuardCase(scenario, { latencyScale: 0.5 }),
     ]);
 
-    const baseOk = isCorrectOutcome(baseline, truth);
+    const tdOk = isCorrectOutcome(ticketDraft, truth);
+    const snapOk = isCorrectOutcome(snapshot, truth);
     const guardOk = isCorrectOutcome(guard, truth);
 
-    if (baseOk) baselinePassed += 1;
-    else baselineLeakedKsh += truth.exposureIfWrongKsh;
-
+    if (tdOk) ticketDraftPassed += 1;
+    if (snapOk) snapshotPassed += 1;
     if (guardOk) guardPassed += 1;
-    else guardLeakedKsh += truth.exposureIfWrongKsh;
-
     if (guard.concurrentOverlapVerified) guardOverlapCount += 1;
 
     rows.push({
       Scenario: scenario.shortLabel,
-      "Baseline Verdict": `${baseOk ? "PASS" : "FAIL"} (${baseline.acceptedProposal?.debitSellerId ?? baseline.verdict})`,
-      "RefundGuard Verdict": `${guardOk ? "PASS" : "FAIL"} (${guard.verdict})`,
+      "Ticket+Draft Baseline": formatOutcome(ticketDraft, tdOk),
+      "1-Agent Snapshot (Same t=0)": formatOutcome(snapshot, snapOk),
+      "RefundGuard (Mozaik)": formatOutcome(guard, guardOk),
       Interceptions: guard.interceptions.map((i) => i.reason).join("+") || "none",
       "Concurrent Overlap": guard.concurrentOverlapVerified ? "YES" : "NO",
-      "Baseline Leakage": baseOk ? "KSh 0" : formatKsh(truth.exposureIfWrongKsh),
-      "RefundGuard Leakage": guardOk ? "KSh 0" : formatKsh(truth.exposureIfWrongKsh),
     });
   }
 
   console.table(rows);
-  console.log("Summary:");
+  console.log("Summary (5 synthetic fixtures; no artificial sum of penalties):");
   console.log(
-    `  Single-Agent Baseline: ${baselinePassed}/${SCENARIOS.length} correct | Financial error/leakage: ${formatKsh(baselineLeakedKsh)}`,
+    `  Ticket-and-Draft Baseline (no warehouse/dispute input):        ${ticketDraftPassed}/${SCENARIOS.length} correct`,
   );
   console.log(
-    `  RefundGuard (Mozaik):  ${guardPassed}/${SCENARIOS.length} correct | Financial error/leakage: ${formatKsh(guardLeakedKsh)} | Verified concurrent overlap: ${guardOverlapCount}/${SCENARIOS.length}`,
+    `  Single-Agent Snapshot Baseline (same t=0 evidence & policy):   ${snapshotPassed}/${SCENARIOS.length} correct (misses mid-flight Cases 4 & 5)`,
+  );
+  console.log(
+    `  RefundGuard (2 concurrent Mozaik agents + InterceptionGate):   ${guardPassed}/${SCENARIOS.length} correct | Verified overlap: ${guardOverlapCount}/${SCENARIOS.length}`,
   );
 }
 

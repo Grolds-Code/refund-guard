@@ -1,6 +1,8 @@
 import { defineRuntime, RuntimeState, type SemanticEvent } from "@mozaik-ai/core";
+import { evaluateDisputeLink } from "../finance/dispute-match.js";
 import type {
   ChargebackWebhookRecord,
+  DisputeMatchEvaluation,
   FinalVerdict,
   InterceptionRecord,
   ProposedRefundAction,
@@ -30,10 +32,13 @@ export class RefundGuardState extends RuntimeState {
   public readonly sentinelFindings = new Map<number, SentinelFinding>();
   public readonly interceptions: InterceptionRecord[] = [];
   public readonly timeline: TimelineEntry[] = [];
+  public readonly supersededProposals: ProposedRefundAction[] = [];
   public acceptedProposal: ProposedRefundAction | null = null;
   public verdict: FinalVerdict | null = null;
-  public refundDeskFinished = false;
+  public lastDisputeEvaluation: DisputeMatchEvaluation | null = null;
+  public refundDeskPendingCount = 0;
   public sentinelPendingCount = 0;
+  public revalidationRequestedForEpoch: number | null = null;
 
   public readonly refundDeskWindows: AgentRunWindow[] = [];
   public readonly sentinelWindows: AgentRunWindow[] = [];
@@ -47,11 +52,22 @@ export class RefundGuardState extends RuntimeState {
     public readonly scenario: ScenarioFixture,
     public readonly mode: "live" | "mock",
     public readonly modelName: string,
+    public readonly allowPostAcceptanceRevalidation = true,
   ) {
     super();
     this.startedAtMs = Date.now();
     this.warehouseNotes = [scenario.initialWarehouseNote];
-    this.chargebacks = scenario.initialChargeback ? [scenario.initialChargeback] : [];
+    this.chargebacks = [];
+    if (scenario.initialChargeback) {
+      const evaluation = evaluateDisputeLink(scenario, scenario.initialChargeback);
+      this.lastDisputeEvaluation = evaluation;
+      if (
+        evaluation.matchState === "VERIFIED_ACTIVE_MATCH" ||
+        evaluation.matchState === "AMBIGUOUS_MATCH"
+      ) {
+        this.chargebacks.push(scenario.initialChargeback);
+      }
+    }
   }
 
   elapsedMs(): number {
@@ -89,34 +105,119 @@ export class RefundGuardState extends RuntimeState {
     return this.warehouseNotes[this.warehouseNotes.length - 1];
   }
 
-  getLatestChargeback(): ChargebackWebhookRecord | null {
-    return this.chargebacks.length > 0
-      ? this.chargebacks[this.chargebacks.length - 1]
-      : null;
+  getLatestRelevantChargeback(): {
+    chargeback: ChargebackWebhookRecord;
+    evaluation: DisputeMatchEvaluation;
+  } | null {
+    for (let i = this.chargebacks.length - 1; i >= 0; i -= 1) {
+      const cb = this.chargebacks[i];
+      const evaluation = evaluateDisputeLink(this.scenario, cb);
+      if (
+        evaluation.matchState === "VERIFIED_ACTIVE_MATCH" ||
+        evaluation.matchState === "AMBIGUOUS_MATCH"
+      ) {
+        this.lastDisputeEvaluation = evaluation;
+        return { chargeback: cb, evaluation };
+      }
+    }
+    return null;
   }
 
-  addWarehouseCorrection(note: WarehouseNoteRecord): number {
+  private invalidatePriorReadiness(reason: string): boolean {
+    const hadAccepted = this.acceptedProposal !== null;
+    if (this.acceptedProposal) {
+      this.supersededProposals.push(this.acceptedProposal);
+      this.acceptedProposal = null;
+    }
+    const hadReadyVerdict =
+      this.verdict === "READY_FOR_HUMAN_APPROVAL" ||
+      this.verdict === "CORRECTED_READY_FOR_APPROVAL";
+    if (hadAccepted || hadReadyVerdict) {
+      this.verdict = null;
+      this.revalidationRequestedForEpoch = this.epoch;
+      this.recordEvent(
+        "readiness.invalidated",
+        "RefundGuardState",
+        `Prior approval invalidated at epoch ${this.epoch}: ${reason}`,
+        { epoch: this.epoch, reason },
+      );
+      return true;
+    }
+    return false;
+  }
+
+  addWarehouseCorrection(note: WarehouseNoteRecord): {
+    epoch: number;
+    invalidatedPriorApproval: boolean;
+  } {
     this.epoch += 1;
     this.warehouseNotes.push(note);
+    const invalidatedPriorApproval = this.invalidatePriorReadiness(
+      `warehouse correction ${note.noteId} superseded earlier evidence`,
+    );
     this.recordEvent(
       "evidence.warehouse_updated",
       "WarehouseFeed",
-      `Late warehouse correction ${note.noteId} arrived (epoch → ${this.epoch}): ${note.text}`,
-      { noteId: note.noteId, epoch: this.epoch },
+      `Late warehouse correction ${note.noteId} arrived (epoch -> ${this.epoch}): ${note.text}`,
+      { noteId: note.noteId, epoch: this.epoch, invalidatedPriorApproval },
     );
-    return this.epoch;
+    return { epoch: this.epoch, invalidatedPriorApproval };
   }
 
-  addChargebackWebhook(chargeback: ChargebackWebhookRecord): number {
+  addChargebackWebhook(chargeback: ChargebackWebhookRecord): {
+    relevant: boolean;
+    epoch: number;
+    evaluation: DisputeMatchEvaluation;
+    invalidatedPriorApproval: boolean;
+  } {
+    const evaluation = evaluateDisputeLink(this.scenario, chargeback);
+    this.lastDisputeEvaluation = evaluation;
+
+    if (
+      evaluation.matchState === "UNRELATED" ||
+      evaluation.matchState === "INACTIVE"
+    ) {
+      this.recordEvent(
+        "evidence.chargeback_ignored",
+        "PSPWebhook",
+        `Ignored dispute ${chargeback.disputeId} (${evaluation.matchState}): ${evaluation.reason}`,
+        {
+          disputeId: chargeback.disputeId,
+          matchState: evaluation.matchState,
+          mismatchedSignals: evaluation.mismatchedSignals,
+        },
+      );
+      return {
+        relevant: false,
+        epoch: this.epoch,
+        evaluation,
+        invalidatedPriorApproval: false,
+      };
+    }
+
     this.epoch += 1;
     this.chargebacks.push(chargeback);
+    const invalidatedPriorApproval = this.invalidatePriorReadiness(
+      `dispute ${chargeback.disputeId} (${evaluation.matchState}) arrived for ${this.scenario.checkoutId}`,
+    );
     this.recordEvent(
       "evidence.chargeback_arrived",
       "PSPWebhook",
-      `Asynchronous bank chargeback ${chargeback.disputeId} (${chargeback.reasonCode}) arrived (epoch → ${this.epoch})`,
-      { disputeId: chargeback.disputeId, amountKsh: chargeback.amountKsh, epoch: this.epoch },
+      `Dispute ${chargeback.disputeId} (${chargeback.reasonCode}, ${evaluation.matchState}) arrived (epoch -> ${this.epoch})`,
+      {
+        disputeId: chargeback.disputeId,
+        amountKsh: chargeback.amountKsh,
+        matchState: evaluation.matchState,
+        epoch: this.epoch,
+        invalidatedPriorApproval,
+      },
     );
-    return this.epoch;
+    return {
+      relevant: true,
+      epoch: this.epoch,
+      evaluation,
+      invalidatedPriorApproval,
+    };
   }
 
   publishSentinelFinding(finding: SentinelFinding): void {
@@ -124,7 +225,7 @@ export class RefundGuardState extends RuntimeState {
     this.recordEvent(
       "sentinel.finding",
       "DisputeFulfillmentSentinel",
-      `[epoch ${finding.epoch}] ${finding.status}${finding.verifiedSellerId ? ` → ${finding.verifiedSellerId} (${finding.verifiedLineId})` : ""}${finding.disputeId ? ` [dispute ${finding.disputeId}]` : ""}: ${finding.summary}`,
+      `[epoch ${finding.epoch}] ${finding.status}${finding.verifiedSellerId ? ` -> ${finding.verifiedSellerId} (${finding.verifiedLineId})` : ""}${finding.disputeId ? ` [dispute ${finding.disputeId}]` : ""}: ${finding.summary}`,
       {
         epoch: finding.epoch,
         status: finding.status,
@@ -176,12 +277,22 @@ export class RefundGuardState extends RuntimeState {
     });
   }
 
-  markRefundDeskFinished(verdict?: FinalVerdict): void {
+  notifyRefundDeskLoopStarted(): void {
+    this.refundDeskPendingCount += 1;
+    this.refundDeskWindows.push({ startedAtMs: Date.now() });
+  }
+
+  notifyRefundDeskLoopSettled(verdict?: FinalVerdict): void {
     if (verdict && !this.verdict) {
       this.verdict = verdict;
     }
-    this.refundDeskFinished = true;
+    this.refundDeskPendingCount = Math.max(0, this.refundDeskPendingCount - 1);
     this.checkCompletion();
+  }
+
+  notifySentinelLoopStarted(): void {
+    this.sentinelPendingCount += 1;
+    this.sentinelWindows.push({ startedAtMs: Date.now() });
   }
 
   notifySentinelLoopSettled(): void {
@@ -189,8 +300,16 @@ export class RefundGuardState extends RuntimeState {
     this.checkCompletion();
   }
 
+  private isIdle(): boolean {
+    return (
+      this.refundDeskWindows.length > 0 &&
+      this.refundDeskPendingCount === 0 &&
+      this.sentinelPendingCount === 0
+    );
+  }
+
   private checkCompletion(): void {
-    if (this.refundDeskFinished && this.sentinelPendingCount === 0) {
+    if (this.isIdle()) {
       const resolvers = this.doneResolvers;
       this.doneResolvers = [];
       for (const r of resolvers) {
@@ -200,14 +319,14 @@ export class RefundGuardState extends RuntimeState {
   }
 
   waitUntilComplete(timeoutMs = 20_000): Promise<void> {
-    if (this.refundDeskFinished && this.sentinelPendingCount === 0) {
+    if (this.isIdle()) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(
           new Error(
-            `RefundGuard session timed out after ${timeoutMs}ms (refundDeskFinished=${this.refundDeskFinished}, sentinelPending=${this.sentinelPendingCount})`,
+            `RefundGuard session timed out after ${timeoutMs}ms (refundDeskPending=${this.refundDeskPendingCount}, sentinelPending=${this.sentinelPendingCount})`,
           ),
         );
       }, timeoutMs);
@@ -261,6 +380,7 @@ export type EvidenceUpdatedPayload = {
   epoch: number;
   kind: "WAREHOUSE_CORRECTION" | "CHARGEBACK_WEBHOOK";
   sourceId: string;
+  invalidatedPriorApproval?: boolean;
 };
 
 export type RefundGuardEvent =

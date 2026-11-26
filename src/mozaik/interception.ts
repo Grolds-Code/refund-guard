@@ -24,15 +24,14 @@ interface ProposeRefundArgs {
  *
  * Before `propose_refund` can execute, this gate:
  * 1. Awaits Agent 2 (DisputeFulfillmentSentinel) for the latest RuntimeState epoch.
- * 2. Checks for active bank chargeback collisions (blocks 2x double-payout).
- * 3. Checks for missing or ambiguous physical return evidence (fail-closed hold).
- * 4. Checks for superseded evidence epochs (rejects proposals started before a mid-flight update).
- * 5. Checks whether the proposed seller debit matches Agent 2's verified warehouse return seller.
- *
- * On policy violation, the original tool call NEVER executes: the handler either
- * halts into `model_message` (for human review) or rewrites the transition back to
- * `message_received` (with protocol-valid FunctionCallOutputItem) so Agent 1 re-plans
- * against the grounded Sentinel findings.
+ * 2. Verifies any dispute webhook via deterministic payment-link matching:
+ *    - Active verified match -> HALT (`FROZEN_DISPUTE_COLLISION`) to block an unsafe
+ *      cross-system refund/payout proposal while the dispute is open.
+ *    - Ambiguous partial match -> HALT (`VERIFY_DISPUTE_MATCH`) for operator verification.
+ *    - Unrelated or inactive dispute -> ignored; never freezes a clean checkout.
+ * 3. Checks for missing or ambiguous physical return evidence -> fail-closed hold.
+ * 4. Checks for superseded evidence epochs -> blocks stale proposal & forces re-plan.
+ * 5. Checks whether proposed seller debit matches Sentinel's verified warehouse seller.
  */
 export class RefundInterceptionGate implements InterceptionHandler {
   private attemptCount = 0;
@@ -75,23 +74,60 @@ export class RefundInterceptionGate implements InterceptionHandler {
     }
 
     const currentEpoch = this.state.epoch;
+    const relevantDispute = this.state.getLatestRelevantChargeback();
 
-    // 1. Chargeback / dispute collision -> HALT immediately (prevent 2x double payout)
-    if (finding?.status === "DISPUTE_COLLISION" || this.state.getLatestChargeback() !== null) {
-      const dispute = this.state.getLatestChargeback();
-      const cited = finding?.citedSourceIds ?? (dispute ? [dispute.disputeId] : []);
-      const detail = `Blocked KSh ${this.state.scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")} refund: active bank chargeback ${dispute?.disputeId ?? finding?.disputeId ?? "UNKNOWN"} collides with ${this.state.scenario.checkoutId}. Issuing a store refund now would cause an irrecoverable double-payout.`;
+    // 1A. Verified active dispute linked to this payment -> block unsafe cross-system refund proposal
+    if (relevantDispute?.evaluation.matchState === "VERIFIED_ACTIVE_MATCH") {
+      const { chargeback, evaluation } = relevantDispute;
+      const cited = Array.from(
+        new Set([
+          chargeback.disputeId,
+          ...(finding?.citedSourceIds ?? []),
+          ...this.state.scenario.settlements.map((s) => s.settlementId),
+        ]),
+      );
+      const detail = `Blocked unsafe cross-system refund/payout proposal (KSh ${this.state.scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")}): ${evaluation.reason}`;
       this.recordInterception({
         blockedSellerId: proposedSeller,
         proposalEpoch,
         currentEpoch,
-        reason: "DOUBLE_PAYOUT_BLOCKED",
+        reason: "UNSAFE_CROSS_SYSTEM_REFUND_BLOCKED",
         detail,
         actionTaken: "HALT_FOR_HUMAN_REVIEW",
         citedSourceIds: cited,
       });
       this.state.verdict = "FROZEN_DISPUTE_COLLISION";
       return this.haltForHumanReview("FROZEN_DISPUTE_COLLISION", detail, cited);
+    }
+
+    // 1B. Ambiguous dispute match -> ask human operator to verify linkage before releasing funds
+    if (
+      relevantDispute?.evaluation.matchState === "AMBIGUOUS_MATCH" ||
+      finding?.status === "DISPUTE_AMBIGUOUS"
+    ) {
+      const disputeId =
+        relevantDispute?.chargeback.disputeId ?? finding?.disputeId ?? "UNKNOWN";
+      const cited = Array.from(
+        new Set([
+          disputeId,
+          ...(finding?.citedSourceIds ?? []),
+          ...this.state.scenario.settlements.map((s) => s.settlementId),
+        ]),
+      );
+      const detail =
+        relevantDispute?.evaluation.reason ??
+        `Dispute ${disputeId} partially matches ${this.state.scenario.checkoutId}; operator verification required before approving payout.`;
+      this.recordInterception({
+        blockedSellerId: proposedSeller,
+        proposalEpoch,
+        currentEpoch,
+        reason: "AMBIGUOUS_DISPUTE_MATCH",
+        detail,
+        actionTaken: "HALT_FOR_HUMAN_REVIEW",
+        citedSourceIds: cited,
+      });
+      this.state.verdict = "VERIFY_DISPUTE_MATCH";
+      return this.haltForHumanReview("VERIFY_DISPUTE_MATCH", detail, cited);
     }
 
     // 2. Missing or ambiguous physical return evidence -> HALT fail-closed
@@ -134,7 +170,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
       );
     }
 
-    // 4. Wrong-seller allocation (zero-sum trap!) -> REJECT & rewrite with Sentinel's verified seller
+    // 4. Wrong-seller allocation (zero-sum trap) -> REJECT & rewrite with Sentinel's verified seller
     if (proposedSeller !== finding.verifiedSellerId) {
       const detail = `Zero-sum misallocation blocked: draft/proposal charged ${proposedSeller}, but Sentinel verified return of ${finding.verifiedLineId} belonging to ${finding.verifiedSellerId} (${finding.evidenceNoteId}). Total remains KSh ${this.state.scenario.draft.totalBatchSettlementKsh.toLocaleString("en-KE")}, but seller deduction must move to ${finding.verifiedSellerId}.`;
       this.recordInterception({
@@ -161,7 +197,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
     this.state.recordEvent(
       "interception.cleared",
       "RefundInterceptionGate",
-      `Cleared propose_refund(debit=${proposedSeller}, epoch=${currentEpoch}): matches Sentinel finding (${finding.evidenceNoteId}, ${finding.verifiedLineId}) with zero active chargebacks.`,
+      `Cleared propose_refund(debit=${proposedSeller}, epoch=${currentEpoch}): matches Sentinel finding (${finding.evidenceNoteId}, ${finding.verifiedLineId}) with zero active linked disputes.`,
       {
         approvedSellerId: proposedSeller,
         epoch: currentEpoch,
@@ -252,7 +288,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
   }
 
   private haltForHumanReview(
-    verdict: "HOLD_MISSING_EVIDENCE" | "FROZEN_DISPUTE_COLLISION",
+    verdict: "HOLD_MISSING_EVIDENCE" | "FROZEN_DISPUTE_COLLISION" | "VERIFY_DISPUTE_MATCH",
     detail: string,
     citedSourceIds: readonly string[],
   ): ExecutableTransition {

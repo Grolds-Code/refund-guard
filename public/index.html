@@ -835,9 +835,11 @@
             <select id="injectionMode">
               <option value="scenario-default">Use scenario default</option>
               <option value="none">None</option>
-              <option value="chargeback">Inject PSP chargeback webhook (KSh 10,000)</option>
-              <option value="correction-seller-a">Inject late QC correction (Seller A)</option>
-              <option value="correction-seller-b">Inject late QC correction (Seller B)</option>
+              <option value="chargeback">Matching active dispute (card 4421 / ref 402)</option>
+              <option value="chargeback-unrelated">Unrelated dispute (card 8812 / ref 999)</option>
+              <option value="chargeback-ambiguous">Ambiguous dispute (card 4421 / ref 988)</option>
+              <option value="correction-seller-a">Late QC warehouse correction (Seller A)</option>
+              <option value="correction-seller-b">Late QC warehouse correction (Seller B)</option>
             </select>
           </div>
 
@@ -879,6 +881,13 @@
               <div id="citationsRow" class="cite-group"></div>
               <div id="baselineBadge" class="baseline-pill"></div>
             </div>
+            <div id="holdPolicyLine" style="margin-top:10px; font-size:12px; color:var(--ink-2);"></div>
+            <details style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px;">
+              <summary style="cursor:pointer; font-size:12px; color:var(--ink-2); font-weight:500;">
+                Inspect Source Records (Warehouse Notes &amp; Settlement Records)
+              </summary>
+              <pre id="sourceRecordsPre" style="margin:10px 0 0; padding:10px; border-radius:6px; background:var(--bg); border:1px solid var(--border); font-family:var(--mono); font-size:11px; color:var(--ink-2); overflow-x:auto; white-space:pre-wrap;"></pre>
+            </details>
           </div>
         </section>
 
@@ -913,17 +922,17 @@
         <!-- 5-Case Benchmark Card -->
         <section id="benchmarkCard" class="surface benchmark-card">
           <div class="card-head">
-            <h2 class="card-title">5-Case Benchmark: Single-Agent Baseline vs. Concurrent RefundGuard</h2>
-            <span id="benchmarkSummary" class="status-tag ok">5/5 protected</span>
+            <h2 class="card-title">5-Case Benchmark: Ticket+Draft vs. 1-Agent Snapshot (Same t=0) vs. RefundGuard</h2>
+            <span id="benchmarkSummary" class="status-tag ok">5/5 verified</span>
           </div>
           <div class="card-body">
             <table>
               <thead>
                 <tr>
                   <th>Scenario</th>
-                  <th>Single-Agent Baseline</th>
+                  <th>Ticket+Draft</th>
+                  <th>1-Agent Snapshot</th>
                   <th>RefundGuard</th>
-                  <th>Interception</th>
                   <th>Overlap</th>
                 </tr>
               </thead>
@@ -1094,11 +1103,10 @@
     }
 
     function renderReport(payload) {
-      const { report, baseline } = payload;
+      const { report, baseline, sourceRecords } = payload;
       state.lastBundle = payload;
       els.downloadBtn.disabled = false;
 
-      // KPI 1: Decision Status
       let tone = "ok";
       let humanLabel = "Cleared for human approval";
       if (report.verdict === "CORRECTED_READY_FOR_APPROVAL") {
@@ -1109,7 +1117,13 @@
         humanLabel = "Held: missing physical evidence";
       } else if (report.verdict === "FROZEN_DISPUTE_COLLISION") {
         tone = "danger";
-        humanLabel = "Frozen: bank chargeback collision";
+        humanLabel = "Frozen: active linked dispute";
+      } else if (report.verdict === "VERIFY_DISPUTE_MATCH") {
+        tone = "warn";
+        humanLabel = "Verify ambiguous dispute match";
+      } else if (report.verdict === "PENDING_REVALIDATION") {
+        tone = "warn";
+        humanLabel = "Pending revalidation on new epoch";
       }
 
       els.verdictTag.className = `status-tag ${tone}`;
@@ -1117,25 +1131,23 @@
       els.verdictHeadline.textContent = humanLabel;
       els.verdictSub.textContent = `Completed in ${report.durationMs}ms across ${report.timeline.length} Mozaik semantic events.`;
 
-      // KPI 2: Financial Protection
       els.epochTag.className = `status-tag ${report.finalEpoch > 1 ? "warn" : ""}`;
       els.epochTag.textContent = `epoch ${report.finalEpoch}`;
 
-      if (report.ledger.doublePayoutPreventedKsh > 0) {
-        els.protectionVal.textContent = `${fmtKsh(report.ledger.doublePayoutPreventedKsh)} saved`;
-        els.protectionSub.textContent = "Duplicate store refund blocked while issuing-bank dispute is open.";
+      if (report.ledger.blockedUnsafeRefundKsh > 0) {
+        els.protectionVal.textContent = `${fmtKsh(report.ledger.blockedUnsafeRefundKsh)} blocked`;
+        els.protectionSub.textContent = `Unsafe cross-system refund blocked; ${fmtKsh(report.ledger.heldReserveKsh)} disputed reserve held.`;
       } else if (report.ledger.misallocationCaughtKsh > 0) {
-        els.protectionVal.textContent = `${fmtKsh(report.ledger.misallocationCaughtKsh)} corrected`;
-        els.protectionSub.textContent = `Zero-sum seller error caught while batch total stayed ${fmtKsh(report.ledger.supportedTotalKsh)}.`;
-      } else if (report.ledger.heldAmountKsh > 0) {
-        els.protectionVal.textContent = `${fmtKsh(report.ledger.heldAmountKsh)} held`;
-        els.protectionSub.textContent = "Fail-closed hold until warehouse confirms physical SKU receipt.";
+        els.protectionVal.textContent = `${fmtKsh(report.ledger.misallocationCaughtKsh)} reallocated`;
+        els.protectionSub.textContent = `Wrong-seller allocation fixed while batch total stayed ${fmtKsh(report.ledger.supportedTotalKsh)}.`;
+      } else if (report.ledger.heldReserveKsh > 0) {
+        els.protectionVal.textContent = `${fmtKsh(report.ledger.heldReserveKsh)} reserve held`;
+        els.protectionSub.textContent = `Requested refund: ${fmtKsh(report.ledger.requestedRefundKsh)}. Held pending verification.`;
       } else {
         els.protectionVal.textContent = fmtKsh(report.ledger.supportedTotalKsh);
         els.protectionSub.textContent = "Verified allocation matches draft and source records exactly.";
       }
 
-      // KPI 3: Concurrency
       const overlapMatch = report.overlapDetail.match(/for (\d+)ms/);
       const overlapMs = overlapMatch ? `${overlapMatch[1]}ms overlap` : (report.concurrentOverlapVerified ? "Verified" : "Sequential");
       els.overlapTag.className = `status-tag ${report.concurrentOverlapVerified ? "ok" : "warn"}`;
@@ -1145,7 +1157,6 @@
 
       renderGantt(report);
 
-      // Grounded Ledger Table
       const rowsHtml = report.ledger.lines
         .map((line) => {
           const deltaCls =
@@ -1190,16 +1201,25 @@
         .map((c) => `<span class="cite">${escapeHtml(c)}</span>`)
         .join("");
 
-      const baseSeller = baseline.acceptedProposal?.debitSellerId ?? "none";
-      const guardSeller = report.acceptedProposal?.debitSellerId ?? "HELD";
+      const holdLineEl = document.getElementById("holdPolicyLine");
+      if (holdLineEl) {
+        holdLineEl.textContent = report.ledger.holdPolicyExplanation;
+      }
+
+      const sourcePre = document.getElementById("sourceRecordsPre");
+      if (sourcePre && sourceRecords) {
+        sourcePre.textContent = JSON.stringify(sourceRecords, null, 2);
+      }
+
+      const baseSeller = baseline.acceptedProposal?.debitSellerId ?? baseline.verdict;
+      const guardSeller = report.acceptedProposal?.debitSellerId ?? report.verdict;
       const prevented = baseline.verdict !== report.verdict || baseSeller !== guardSeller;
       els.baselineBadge.innerHTML = `
-        <span>Single-agent baseline:</span>
+        <span>1-Agent Snapshot (same t=0):</span>
         <code>${escapeHtml(baseSeller)}</code>
-        <span class="status-tag ${prevented ? "ok" : ""}">${prevented ? "error prevented" : "matched"}</span>
+        <span class="status-tag ${prevented ? "ok" : ""}">${prevented ? "mid-flight caught" : "matched"}</span>
       `;
 
-      // Interception Gate
       if (report.interceptions.length === 0) {
         els.gateBox.innerHTML = `
           <div class="gate-item">
@@ -1208,7 +1228,7 @@
               <span class="eyebrow">epoch ${report.finalEpoch}</span>
             </div>
             <div class="gate-desc">
-              RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with zero active chargebacks.
+              RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with zero active linked disputes.
             </div>
           </div>
         `;
@@ -1306,9 +1326,9 @@
             (r) => `
             <tr>
               <td><strong>${escapeHtml(r.shortLabel)}</strong></td>
-              <td>${escapeHtml(r.baseline.verdict)} (${escapeHtml(r.baseline.debitSellerId ?? "none")})</td>
+              <td>${escapeHtml(r.ticketDraft.debitSellerId ?? r.ticketDraft.verdict)}</td>
+              <td>${escapeHtml(r.snapshot.debitSellerId ?? r.snapshot.verdict)}</td>
               <td><strong>${escapeHtml(r.guard.verdict)}</strong></td>
-              <td>${escapeHtml(r.guard.interceptions.join(", ") || "none")}</td>
               <td>${r.guard.concurrentOverlapVerified ? "Yes" : "No"}</td>
             </tr>
           `,

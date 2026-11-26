@@ -26,19 +26,38 @@ class WhenModelAnswers extends SituationSpecification {
 }
 
 /**
- * Fair single-agent sequential baseline for comparison:
- * - Uses the EXACT SAME deterministic integer-KSh calculator and inference runner.
- * - Has ONLY ONE agent (RefundDeskAgent) operating on the t=0 ticket + draft snapshot,
- *   with NO concurrent DisputeFulfillmentSentinel and NO Mozaik InterceptionHandler.
- *
- * This demonstrates concretely why a single non-intercepted agent misses:
- * - Zero-sum wrong-seller draft errors hidden behind a balanced batch total,
- * - Missing warehouse receipt evidence (no independent fulfillment check),
- * - Mid-flight warehouse corrections (commits on stale epoch=1), and
- * - Mid-flight asynchronous bank chargeback webhooks (leaks KSh 10,000 double-payout).
+ * Ticket-and-Draft Baseline:
+ * Single sequential agent that sees ONLY the customer ticket and payout draft
+ * (no warehouse feed, no dispute feed, no concurrent interception).
+ * Measures the value of cross-system evidence grounding + interception combined.
  */
-export async function runSingleAgentBaseline(
+export async function runTicketAndDraftBaseline(
   scenario: ScenarioFixture,
+  options?: { modeOverride?: "auto" | "live" | "mock"; latencyScale?: number },
+): Promise<CaseRunReport> {
+  return runBaselineVariant(scenario, "ticket-and-draft-baseline", options);
+}
+
+/**
+ * Fair Single-Agent Snapshot Baseline (isolates concurrency & mid-flight interception):
+ * Receives the EXACT SAME t=0 evidence as RefundGuard (customer ticket, payout draft,
+ * full policy, initial warehouse return note, and any initial linked dispute), using
+ * the exact same deterministic ledger calculator and inference runner.
+ *
+ * Because it runs as a single non-intercepted pass on the t=0 snapshot, it handles
+ * static Cases 1-3 accurately, but misses mid-flight updates arriving while the review
+ * is running (Case 4 late warehouse correction and Case 5 mid-flight dispute).
+ */
+export async function runSingleAgentSnapshotBaseline(
+  scenario: ScenarioFixture,
+  options?: { modeOverride?: "auto" | "live" | "mock"; latencyScale?: number },
+): Promise<CaseRunReport> {
+  return runBaselineVariant(scenario, "single-agent-snapshot-baseline", options);
+}
+
+async function runBaselineVariant(
+  scenario: ScenarioFixture,
+  architecture: "ticket-and-draft-baseline" | "single-agent-snapshot-baseline",
   options?: { modeOverride?: "auto" | "live" | "mock"; latencyScale?: number },
 ): Promise<CaseRunReport> {
   const latencyScale = options?.latencyScale ?? 1;
@@ -48,7 +67,7 @@ export async function runSingleAgentBaseline(
   });
 
   const runtime = createRefundGuardRuntime();
-  const state = new RefundGuardState(scenario, resolved.mode, resolved.modelName);
+  const state = new RefundGuardState(scenario, resolved.mode, resolved.modelName, false);
 
   runtime.initializeRuntime({
     state,
@@ -91,27 +110,77 @@ export async function runSingleAgentBaseline(
         debitSellerId: args.debitSellerId,
         refundAmountKsh: scenario.draft.refundAmountKsh,
         rationale: args.rationale,
-        citedSourceIds: [scenario.ticket.ticketId, scenario.draft.draftId],
+        citedSourceIds:
+          architecture === "single-agent-snapshot-baseline"
+            ? [
+                scenario.ticket.ticketId,
+                scenario.draft.draftId,
+                scenario.initialWarehouseNote.noteId,
+              ]
+            : [scenario.ticket.ticketId, scenario.draft.draftId],
       };
-      state.verdict = "READY_FOR_HUMAN_APPROVAL";
+      const wasCorrected = args.debitSellerId !== scenario.draft.debitedSellerId;
+      state.verdict = wasCorrected
+        ? "CORRECTED_READY_FOR_APPROVAL"
+        : "READY_FOR_HUMAN_APPROVAL";
       state.recordEvent(
         "proposal.accepted",
-        "SingleBaselineAgent",
-        `Baseline approved debit=${args.debitSellerId} KSh ${scenario.draft.refundAmountKsh.toLocaleString("en-KE")} without concurrent sentinel or interception.`,
+        architecture,
+        `Approved debit=${args.debitSellerId} KSh ${scenario.draft.refundAmountKsh.toLocaleString("en-KE")} (no concurrent sentinel or mid-flight interception).`,
       );
       return { accepted: true, debitSellerId: args.debitSellerId };
     },
   };
+
+  const holdForReviewTool: Tool = {
+    type: "function",
+    name: "hold_for_review",
+    description: "Hold refund payout for human review when evidence is missing or disputed.",
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: {
+        verdict: {
+          type: "string",
+          enum: [
+            "HOLD_MISSING_EVIDENCE",
+            "FROZEN_DISPUTE_COLLISION",
+            "VERIFY_DISPUTE_MATCH",
+          ],
+        },
+        reason: { type: "string" },
+      },
+      required: ["verdict", "reason"],
+      additionalProperties: false,
+    },
+    invoke: async (args: {
+      verdict: "HOLD_MISSING_EVIDENCE" | "FROZEN_DISPUTE_COLLISION" | "VERIFY_DISPUTE_MATCH";
+      reason: string;
+    }) => {
+      state.acceptedProposal = null;
+      state.verdict = args.verdict;
+      state.recordEvent("proposal.held", architecture, `Held case (${args.verdict}): ${args.reason}`);
+      return { held: true, verdict: args.verdict };
+    },
+  };
+
+  const tools =
+    architecture === "single-agent-snapshot-baseline"
+      ? [proposeRefundTool, holdForReviewTool]
+      : [proposeRefundTool];
 
   const onOpened: SituationHandler = {
     specification: new WhenCaseOpened(),
     processor: {
       apply({ participant }) {
         if (!(participant instanceof Agent)) return;
-        const prompt = [
-          "Review this Black Friday customer refund ticket and payout draft, then call `propose_refund`.",
+        const lines = [
+          architecture === "single-agent-snapshot-baseline"
+            ? "Review the customer ticket, payout draft, policy, initial warehouse note, and any initial dispute. Call `propose_refund` if verified, or `hold_for_review` if missing evidence or disputed."
+            : "Review this Black Friday customer refund ticket and payout draft, then call `propose_refund`.",
           `CHECKOUT_ID: ${scenario.checkoutId}`,
           `INITIAL_EPOCH: 1`,
+          `CURRENT_EPOCH: 1`,
           `REFUND_AMOUNT_KSH: ${scenario.draft.refundAmountKsh}`,
           "CUSTOMER_TICKET:",
           `${scenario.ticket.ticketId}: ${scenario.ticket.message}`,
@@ -119,11 +188,31 @@ export async function runSingleAgentBaseline(
           `DRAFT_ID: ${scenario.draft.draftId}`,
           `DRAFT_DEBITED_SELLER: ${scenario.draft.debitedSellerId}`,
           `DRAFT_TOTAL_KSH: ${scenario.draft.totalBatchSettlementKsh}`,
-        ].join("\n");
+        ];
 
-        state.refundDeskWindows.push({ startedAtMs: Date.now() });
-        // Notice: NO InterceptionHandler and NO concurrent Sentinel!
-        runtime.runLoop(participant.getId(), prompt, {
+        if (architecture === "single-agent-snapshot-baseline") {
+          const initialDispute = state.getLatestRelevantChargeback();
+          lines.push(
+            "POLICY:",
+            scenario.policySummary,
+            `WAREHOUSE_NOTE_ID: ${scenario.initialWarehouseNote.noteId}`,
+            "WAREHOUSE_NOTE_TEXT:",
+            scenario.initialWarehouseNote.text,
+            "CHARGEBACK_SECTION:",
+            initialDispute
+              ? [
+                  `DISPUTE_ID: ${initialDispute.chargeback.disputeId}`,
+                  `DISPUTE_STATUS: ${initialDispute.chargeback.status}`,
+                  `MATCH_STATE: ${initialDispute.evaluation.matchState}`,
+                  `NARRATIVE: ${initialDispute.chargeback.narrative}`,
+                ].join("\n")
+              : "NONE",
+            "END_EVIDENCE",
+          );
+        }
+
+        state.notifyRefundDeskLoopStarted();
+        runtime.runLoop(participant.getId(), lines.join("\n"), {
           model: state.modelName,
           context: participant.getMemory().getContext(),
           tools: participant.getTools(),
@@ -133,11 +222,13 @@ export async function runSingleAgentBaseline(
   };
 
   const singleAgent = createAgent({
-    name: "SingleBaselineAgent",
+    name: architecture,
     capabilities: ["refund-policy"],
     instruction:
-      "Review the customer refund ticket and payout draft, then call propose_refund.",
-    tools: [proposeRefundTool],
+      architecture === "single-agent-snapshot-baseline"
+        ? "Review the full t=0 snapshot (ticket, draft, policy, warehouse note, initial dispute) and call propose_refund or hold_for_review."
+        : "Review the customer refund ticket and payout draft, then call propose_refund.",
+    tools,
     handlers: [onOpened],
   });
 
@@ -150,9 +241,9 @@ export async function runSingleAgentBaseline(
         processor: {
           apply({ event }) {
             if (event.producerId === singleAgent.getId()) {
-              const w = state.refundDeskWindows[state.refundDeskWindows.length - 1];
+              const w = state.refundDeskWindows.find((x) => !x.endedAtMs);
               if (w) w.endedAtMs = Date.now();
-              state.markRefundDeskFinished("READY_FOR_HUMAN_APPROVAL");
+              state.notifyRefundDeskLoopSettled("READY_FOR_HUMAN_APPROVAL");
             }
           },
         },
@@ -164,8 +255,8 @@ export async function runSingleAgentBaseline(
   runtime.join(singleAgent);
   runtime.join(observer);
 
-  // Even when the exact same mid-flight event arrives in the background,
-  // the single baseline agent has no concurrent sentinel or interception gate.
+  // Mid-flight events arrive in the background while the single agent is running,
+  // but without a concurrent Sentinel or InterceptionHandler they are not intercepted.
   let injectionTimer: ReturnType<typeof setTimeout> | undefined;
   if (scenario.midFlightInjection) {
     const inj = scenario.midFlightInjection;
@@ -193,21 +284,27 @@ export async function runSingleAgentBaseline(
   }
 
   const verdict: FinalVerdict = state.verdict ?? "READY_FOR_HUMAN_APPROVAL";
-  const chosenSeller = state.acceptedProposal?.debitSellerId ?? scenario.draft.debitedSellerId;
+  const chosenSeller =
+    verdict === "READY_FOR_HUMAN_APPROVAL" || verdict === "CORRECTED_READY_FOR_APPROVAL"
+      ? (state.acceptedProposal?.debitSellerId ?? scenario.draft.debitedSellerId)
+      : null;
   const ledger = computeGroundedLedger(scenario, verdict, chosenSeller, null);
 
   return {
     scenarioId: scenario.id,
     scenarioTitle: scenario.title,
     mode: resolved.mode,
-    architecture: "single-agent-baseline",
+    modelName: resolved.modelName,
+    architecture,
     verdict,
     finalEpoch: state.epoch,
     durationMs: state.elapsedMs(),
     concurrentOverlapVerified: false,
     overlapDetail: "Single sequential agent: no concurrent peer agent.",
     sentinelFinding: null,
+    disputeEvaluation: state.lastDisputeEvaluation,
     acceptedProposal: state.acceptedProposal,
+    supersededProposals: state.supersededProposals,
     interceptions: [],
     ledger,
     timeline: state.timeline,

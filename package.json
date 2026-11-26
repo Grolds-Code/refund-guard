@@ -8,6 +8,7 @@
     "start": "tsx src/server.ts",
     "cli": "tsx src/cli.ts",
     "compare": "tsx src/compare.ts",
+    "trace:live": "tsx src/live-trace.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

@@ -24,8 +24,8 @@ export interface ResolvedInferenceMode {
 /**
  * Deterministic Mozaik InferenceRunner that parses actual prompt content
  * (customer tickets, warehouse free-text notes, PSP dispute narratives,
- * and interception feedback) so both automated tests and live judge edits
- * work reliably with zero external API keys.
+ * and interception feedback) so automated tests and live judge edits
+ * work reproducibly without requiring an external API key.
  */
 export class RefundGuardMockRunner implements InferenceRunner {
   private callCounter = 0;
@@ -44,11 +44,10 @@ export class RefundGuardMockRunner implements InferenceRunner {
     const latestUser = userMessages[userMessages.length - 1]?.content.text ?? "";
     const firstUser = userMessages[0]?.content.text ?? "";
 
-    // Branch A: DisputeFulfillmentSentinel agent (has `publish_sentinel_finding` tool)
+    // Branch A: DisputeFulfillmentSentinel agent
     if (toolNames.has("publish_sentinel_finding")) {
       await delay(Math.round(55 * this.latencyScale));
 
-      // If tool already executed for the latest user turn, emit concise summary.
       const lastItem = items[items.length - 1];
       if (lastItem instanceof FunctionCallOutputItem) {
         return {
@@ -77,9 +76,104 @@ export class RefundGuardMockRunner implements InferenceRunner {
       };
     }
 
-    // Branch B: RefundDeskAgent (or Baseline single agent) with `propose_refund` tool
+    // Branch B: Single-Agent Full-Snapshot Baseline (reads t=0 warehouse + dispute + policy)
+    if (toolNames.has("propose_refund") && toolNames.has("hold_for_review")) {
+      await delay(Math.round(175 * this.latencyScale));
+
+      const lastItem = items[items.length - 1];
+      if (lastItem instanceof FunctionCallOutputItem) {
+        return {
+          items: [
+            ModelMessageItem.rehydrate({
+              text: `Single-agent snapshot decision recorded: ${lastItem.output.text}`,
+            }),
+          ],
+          tokenUsage: undefined,
+          rowResponse: { mock: true, agent: "single-agent-snapshot" },
+        };
+      }
+
+      const parsedEvidence = analyzeSentinelEvidence(firstUser);
+      const checkoutId = extractString(firstUser, /CHECKOUT_ID:\s*([A-Z0-9-]+)/i, "CHK-402");
+      const refundAmountKsh = extractInt(firstUser, /REFUND_AMOUNT_KSH:\s*(\d+)/i, 10_000);
+      const initialEpoch = extractInt(firstUser, /INITIAL_EPOCH:\s*(\d+)/i, 1);
+
+      if (parsedEvidence.status === "DISPUTE_COLLISION") {
+        const callId = `call_snap_${++this.callCounter}`;
+        return {
+          items: [
+            FunctionCallItem.rehydrate({
+              callId,
+              name: "hold_for_review",
+              args: JSON.stringify({
+                verdict: "FROZEN_DISPUTE_COLLISION",
+                reason: parsedEvidence.summary,
+              }),
+            }),
+          ],
+          tokenUsage: undefined,
+          rowResponse: { mock: true, agent: "single-agent-snapshot" },
+        };
+      }
+
+      if (parsedEvidence.status === "DISPUTE_AMBIGUOUS") {
+        const callId = `call_snap_${++this.callCounter}`;
+        return {
+          items: [
+            FunctionCallItem.rehydrate({
+              callId,
+              name: "hold_for_review",
+              args: JSON.stringify({
+                verdict: "VERIFY_DISPUTE_MATCH",
+                reason: parsedEvidence.summary,
+              }),
+            }),
+          ],
+          tokenUsage: undefined,
+          rowResponse: { mock: true, agent: "single-agent-snapshot" },
+        };
+      }
+
+      if (parsedEvidence.status === "MISSING_OR_AMBIGUOUS" || parsedEvidence.verifiedSellerId === "NONE") {
+        const callId = `call_snap_${++this.callCounter}`;
+        return {
+          items: [
+            FunctionCallItem.rehydrate({
+              callId,
+              name: "hold_for_review",
+              args: JSON.stringify({
+                verdict: "HOLD_MISSING_EVIDENCE",
+                reason: parsedEvidence.summary,
+              }),
+            }),
+          ],
+          tokenUsage: undefined,
+          rowResponse: { mock: true, agent: "single-agent-snapshot" },
+        };
+      }
+
+      const callId = `call_snap_${++this.callCounter}`;
+      return {
+        items: [
+          FunctionCallItem.rehydrate({
+            callId,
+            name: "propose_refund",
+            args: JSON.stringify({
+              checkoutId,
+              debitSellerId: parsedEvidence.verifiedSellerId,
+              refundAmountKsh,
+              epoch: initialEpoch,
+              rationale: `Single-agent snapshot proposal from t=0 warehouse note: debit ${parsedEvidence.verifiedSellerId}.`,
+            }),
+          }),
+        ],
+        tokenUsage: undefined,
+        rowResponse: { mock: true, agent: "single-agent-snapshot" },
+      };
+    }
+
+    // Branch C: RefundDeskAgent (or Ticket-and-Draft baseline)
     if (toolNames.has("propose_refund")) {
-      // Simulate realistic LLM reasoning window so mid-flight events genuinely overlap.
       const isReplan = latestUser.includes("INTERCEPTION_FEEDBACK");
       await delay(Math.round((isReplan ? 45 : 175) * this.latencyScale));
 
@@ -133,15 +227,15 @@ export class RefundGuardMockRunner implements InferenceRunner {
 
 /**
  * Natural-language parser for the Sentinel mock runner.
- * Evaluates the actual warehouse note text and chargeback webhook narrative
- * present in the prompt, so live judge edits immediately change findings.
+ * Evaluates actual warehouse note text and linked dispute signals present in
+ * the prompt, so live judge edits immediately change findings.
  */
 function analyzeSentinelEvidence(prompt: string): {
   epoch: number;
   status: SentinelEvidenceStatus;
-  verifiedSellerId: SellerId | null;
-  verifiedLineId: string | null;
-  disputeId: string | null;
+  verifiedSellerId: SellerId | "NONE";
+  verifiedLineId: string;
+  disputeId: string;
   evidenceNoteId: string;
   confidence: "HIGH" | "LOW";
   summary: string;
@@ -152,29 +246,56 @@ function analyzeSentinelEvidence(prompt: string): {
   const noteText = extractSection(prompt, "WAREHOUSE_NOTE_TEXT:", "CHARGEBACK_SECTION:");
   const chargebackSection = extractSection(prompt, "CHARGEBACK_SECTION:", "END_EVIDENCE");
 
-  // 1. Check for active bank chargeback / dispute collision
-  const hasChargeback =
-    chargebackSection.length > 0 &&
-    !/NONE/i.test(chargebackSection.trim()) &&
-    /(chargeback|dispute|visa|mastercard|13\.1|dsp-)/i.test(chargebackSection);
-
-  if (hasChargeback) {
+  // 1. Evaluate dispute linkage if present in CHARGEBACK_SECTION
+  if (chargebackSection.length > 0 && !/^NONE$/i.test(chargebackSection.trim())) {
     const disputeId = extractString(
       chargebackSection,
       /DISPUTE_ID:\s*([A-Z0-9-]+)/i,
       "DSP-LIVE",
     );
-    return {
-      epoch,
-      status: "DISPUTE_COLLISION",
-      verifiedSellerId: null,
-      verifiedLineId: null,
-      disputeId,
-      evidenceNoteId: noteId,
-      confidence: "HIGH",
-      summary: `Correlated asynchronous PSP chargeback ${disputeId} against checkout CHK-402 (card ending 4421, KSh 10,000). Store refund must be frozen to prevent double-payout.`,
-      citedSourceIds: [disputeId, noteId, "STL-PAY-402"],
-    };
+    const matchState = extractString(
+      chargebackSection,
+      /MATCH_STATE:\s*([A-Z_]+)/i,
+      "VERIFIED_ACTIVE_MATCH",
+    );
+    const disputeStatus = extractString(
+      chargebackSection,
+      /DISPUTE_STATUS:\s*([A-Z_]+)/i,
+      "OPEN",
+    );
+
+    if (disputeStatus === "OPEN" && matchState === "VERIFIED_ACTIVE_MATCH") {
+      return {
+        epoch,
+        status: "DISPUTE_COLLISION",
+        verifiedSellerId: inferWarehouseSeller(noteText) ?? "NONE",
+        verifiedLineId:
+          inferWarehouseSeller(noteText) === "SELLER-A"
+            ? "LINE-402-A"
+            : inferWarehouseSeller(noteText) === "SELLER-B"
+              ? "LINE-402-B"
+              : "NONE",
+        disputeId,
+        evidenceNoteId: noteId,
+        confidence: "HIGH",
+        summary: `Verified active PSP dispute ${disputeId} linked to checkout CHK-402 / STL-PAY-402. Block unsafe cross-system refund proposal.`,
+        citedSourceIds: [disputeId, noteId, "STL-PAY-402"],
+      };
+    }
+
+    if (disputeStatus === "OPEN" && matchState === "AMBIGUOUS_MATCH") {
+      return {
+        epoch,
+        status: "DISPUTE_AMBIGUOUS",
+        verifiedSellerId: "NONE",
+        verifiedLineId: "NONE",
+        disputeId,
+        evidenceNoteId: noteId,
+        confidence: "LOW",
+        summary: `Dispute ${disputeId} partially matches payment signals for CHK-402; operator verification required before releasing payout.`,
+        citedSourceIds: [disputeId, noteId, "STL-PAY-402"],
+      };
+    }
   }
 
   // 2. Check for missing / unreceived / unverified parcel language
@@ -187,9 +308,9 @@ function analyzeSentinelEvidence(prompt: string): {
     return {
       epoch,
       status: "MISSING_OR_AMBIGUOUS",
-      verifiedSellerId: null,
-      verifiedLineId: null,
-      disputeId: null,
+      verifiedSellerId: "NONE",
+      verifiedLineId: "NONE",
+      disputeId: "NONE",
       evidenceNoteId: noteId,
       confidence: "LOW",
       summary: `Warehouse intake ${noteId} does not confirm physical receipt of an identifiable seller SKU.`,
@@ -198,7 +319,50 @@ function analyzeSentinelEvidence(prompt: string): {
   }
 
   // 3. Determine which seller's item physically came back from free-text note.
-  // Handle negation carefully (e.g., "No boots in parcel" or "boots were NOT returned").
+  const seller = inferWarehouseSeller(noteText);
+  if (seller === "SELLER-A") {
+    return {
+      epoch,
+      status: "VERIFIED_RETURN",
+      verifiedSellerId: "SELLER-A",
+      verifiedLineId: "LINE-402-A",
+      disputeId: "NONE",
+      evidenceNoteId: noteId,
+      confidence: "HIGH",
+      summary: `Verified physical return of Navy Quilted Winter Jacket (LINE-402-A / SELLER-A) from ${noteId}.`,
+      citedSourceIds: [noteId, "LINE-402-A"],
+    };
+  }
+
+  if (seller === "SELLER-B") {
+    return {
+      epoch,
+      status: "VERIFIED_RETURN",
+      verifiedSellerId: "SELLER-B",
+      verifiedLineId: "LINE-402-B",
+      disputeId: "NONE",
+      evidenceNoteId: noteId,
+      confidence: "HIGH",
+      summary: `Verified physical return of Tan Leather Chelsea Boots (LINE-402-B / SELLER-B) from ${noteId}.`,
+      citedSourceIds: [noteId, "LINE-402-B"],
+    };
+  }
+
+  return {
+    epoch,
+    status: "MISSING_OR_AMBIGUOUS",
+    verifiedSellerId: "NONE",
+    verifiedLineId: "NONE",
+    disputeId: "NONE",
+    evidenceNoteId: noteId,
+    confidence: "LOW",
+    summary: `Warehouse note ${noteId} is ambiguous between Seller A and Seller B; holding for human inspection.`,
+    citedSourceIds: [noteId],
+  };
+}
+
+function inferWarehouseSeller(noteText: string): SellerId | null {
+  const lowerNote = noteText.toLowerCase();
   const negatedBoots =
     /(no boots|boots were not|boots not returned|reused the boot box|inside is actually[^.!;\n]*jacket)/i.test(
       lowerNote,
@@ -217,45 +381,9 @@ function analyzeSentinelEvidence(prompt: string): {
       lowerNote,
     );
 
-  if (mentionsJacket && !mentionsBoots) {
-    return {
-      epoch,
-      status: "VERIFIED_RETURN",
-      verifiedSellerId: "SELLER-A",
-      verifiedLineId: "LINE-402-A",
-      disputeId: null,
-      evidenceNoteId: noteId,
-      confidence: "HIGH",
-      summary: `Verified physical return of Navy Quilted Winter Jacket (LINE-402-A / SELLER-A) from ${noteId}.`,
-      citedSourceIds: [noteId, "LINE-402-A"],
-    };
-  }
-
-  if (mentionsBoots && !mentionsJacket) {
-    return {
-      epoch,
-      status: "VERIFIED_RETURN",
-      verifiedSellerId: "SELLER-B",
-      verifiedLineId: "LINE-402-B",
-      disputeId: null,
-      evidenceNoteId: noteId,
-      confidence: "HIGH",
-      summary: `Verified physical return of Tan Leather Chelsea Boots (LINE-402-B / SELLER-B) from ${noteId}.`,
-      citedSourceIds: [noteId, "LINE-402-B"],
-    };
-  }
-
-  return {
-    epoch,
-    status: "MISSING_OR_AMBIGUOUS",
-    verifiedSellerId: null,
-    verifiedLineId: null,
-    disputeId: null,
-    evidenceNoteId: noteId,
-    confidence: "LOW",
-    summary: `Warehouse note ${noteId} is ambiguous between Seller A and Seller B; holding for human inspection.`,
-    citedSourceIds: [noteId],
-  };
+  if (mentionsJacket && !mentionsBoots) return "SELLER-A";
+  if (mentionsBoots && !mentionsJacket) return "SELLER-B";
+  return null;
 }
 
 function analyzeRefundDeskPrompt(
@@ -273,7 +401,6 @@ function analyzeRefundDeskPrompt(
   const refundAmountKsh = extractInt(firstUser, /REFUND_AMOUNT_KSH:\s*(\d+)/i, 10_000);
   const initialEpoch = extractInt(firstUser, /INITIAL_EPOCH:\s*(\d+)/i, 1);
 
-  // If this turn is a replan triggered by RefundInterceptionGate, follow the verified correction!
   if (latestUser.includes("INTERCEPTION_FEEDBACK")) {
     const correctedSeller = extractString(
       latestUser,
@@ -290,8 +417,6 @@ function analyzeRefundDeskPrompt(
     };
   }
 
-  // Initial pass: Refund Desk reads the customer ticket + payout draft queue.
-  // If the ticket explicitly names the jacket or boots, use that; otherwise follow the draft's debited seller.
   const ticketText = extractSection(firstUser, "CUSTOMER_TICKET:", "PAYOUT_DRAFT:");
   const draftDebitedSeller = extractString(
     firstUser,
@@ -344,7 +469,6 @@ export function resolveInferenceMode(options?: {
 
     const isKnown = supportedModels.some((m) => m.specification.name === modelName);
     if (!isKnown) {
-      // Allow any custom OpenAI-compatible model name via OpenAIChatCompletions
       return {
         mode: "live",
         modelName,

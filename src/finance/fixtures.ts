@@ -1,4 +1,11 @@
-import type { OrderLineRecord, ScenarioFixture, SellerId, SellerProfile, SettlementRecord } from "./types.js";
+import type {
+  ChargebackWebhookRecord,
+  OrderLineRecord,
+  ScenarioFixture,
+  SellerId,
+  SellerProfile,
+  SettlementRecord,
+} from "./types.js";
 
 const SELLERS: Record<SellerId, SellerProfile> = {
   "SELLER-A": {
@@ -41,8 +48,9 @@ const POLICY_SUMMARY = [
   "Marketplace Black Friday Refund & Payout Policy (POL-BF-2026):",
   "1. Seller debit liability follows the physically returned item verified by warehouse inspection.",
   "2. Never release a seller deduction when physical return receipt is missing or SKU/seller is unverified (fail closed).",
-  "3. Immediately freeze any refund approval if an asynchronous PSP/bank chargeback dispute is open on the same checkout (prevents 2x double-payout).",
-  "4. Any proposal based on a superseded evidence epoch MUST be rejected and re-evaluated against the latest verified record.",
+  "3. Block any cross-system refund or seller-payout proposal when an active PSP/bank dispute is verified against the original payment (even when a card processor blocks same-charge refunds, OMS/support/payout workflows can still issue unsafe cross-system credits).",
+  "4. If an incoming dispute only partially matches the payment, hold for operator verification instead of auto-approving or auto-freezing as a confirmed match.",
+  "5. Any proposal based on a superseded evidence epoch MUST be invalidated and revalidated against the latest verified record.",
 ].join("\n");
 
 function baseSettlements(includePostedRefund: boolean): readonly SettlementRecord[] {
@@ -177,7 +185,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
     title: "3. Missing Warehouse Evidence (Fail-Closed Hold)",
     shortLabel: "Missing Evidence",
     summary:
-      "Processor refund posted and draft debits Seller B, but warehouse intake shows no physical parcel received yet. Interceptor fails closed and holds release.",
+      "Processor refund posted and draft debits Seller B, but warehouse intake shows no physical parcel received yet. Interceptor fails closed and holds the unsettled checkout lines.",
     policySummary: POLICY_SUMMARY,
     batchId: "BATCH-BF-2026-01",
     checkoutId: "CHK-402",
@@ -227,7 +235,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
     title: "4. Late Warehouse Correction Mid-Flight (Epoch Invalidation)",
     shortLabel: "Mid-Flight Correction",
     summary:
-      "Initial note tentatively names Seller B's footwear box, so Agent 1 starts approving Seller B. Mid-flight, QC opens the box, finds Seller A's jacket, bumps epoch 1→2, and the interceptor rejects the stale approval.",
+      "Initial note tentatively names Seller B's footwear box, so Agent 1 starts approving Seller B. Mid-flight, QC opens the box, finds Seller A's jacket, bumps epoch 1->2, and the interceptor rejects the stale approval.",
     policySummary: POLICY_SUMMARY,
     batchId: "BATCH-BF-2026-01",
     checkoutId: "CHK-402",
@@ -285,10 +293,10 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
   },
   {
     id: "case-5-chargeback-collision",
-    title: "5. Mid-Flight Chargeback Collision (Double-Payout Blocked)",
-    shortLabel: "Chargeback Collision",
+    title: "5. Mid-Flight Chargeback Collision (Cross-System Refund Blocked)",
+    shortLabel: "Dispute Collision",
     summary:
-      "Customer demands an immediate Black Friday refund while an external bank chargeback webhook arrives mid-flight under a separate PSP reference. Sentinel correlates the dispute and the interceptor halts the KSh 10,000 double-payout.",
+      "Customer demands an immediate Black Friday refund while an active PSP dispute verified against STL-PAY-402 / card 4421 arrives mid-flight. Sentinel correlates the dispute and the interceptor blocks the unsafe cross-system refund proposal.",
     policySummary: POLICY_SUMMARY,
     batchId: "BATCH-BF-2026-01",
     checkoutId: "CHK-402",
@@ -337,13 +345,15 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
       kind: "CHARGEBACK_WEBHOOK",
       chargeback: {
         disputeId: "DSP-505",
+        status: "OPEN",
         receivedAt: "2026-11-26T14:30:04+03:00",
         pspReferenceSuffix: "402",
+        paymentSettlementId: "STL-PAY-402",
         cardLast4: "4421",
         amountKsh: 10_000,
         reasonCode: "VISA_13.1_MERCHANDISE_NOT_RECEIVED",
         narrative:
-          "Asynchronous issuing-bank chargeback opened on card ending 4421 for KSh 10,000 (merchant checkout ref ending 402): cardholder disputes navy jacket charge while requesting store refund.",
+          "Active issuing-bank dispute opened on card ending 4421 for KSh 10,000 (merchant checkout ref ending 402, settlement STL-PAY-402): cardholder disputes navy jacket charge while requesting store refund.",
       },
     },
   },
@@ -355,4 +365,33 @@ export function getScenarioById(id: string): ScenarioFixture {
     throw new Error(`Unknown scenario id: ${id}`);
   }
   return found;
+}
+
+export function createUnrelatedDisputeFixture(): ChargebackWebhookRecord {
+  return {
+    disputeId: "DSP-UNREL-999",
+    status: "OPEN",
+    receivedAt: "2026-11-26T14:31:00+03:00",
+    pspReferenceSuffix: "999",
+    paymentSettlementId: "STL-PAY-999",
+    cardLast4: "8812",
+    amountKsh: 4_500,
+    reasonCode: "VISA_10.4_FRAUD",
+    narrative:
+      "Active bank dispute on unrelated checkout CHK-999, card ending 8812, amount KSh 4,500.",
+  };
+}
+
+export function createAmbiguousDisputeFixture(): ChargebackWebhookRecord {
+  return {
+    disputeId: "DSP-AMBIG-4421",
+    status: "OPEN",
+    receivedAt: "2026-11-26T14:32:00+03:00",
+    pspReferenceSuffix: "988",
+    cardLast4: "4421",
+    amountKsh: 10_000,
+    reasonCode: "VISA_13.1_MERCHANDISE_NOT_RECEIVED",
+    narrative:
+      "Active bank dispute on card ending 4421 for KSh 10,000, but PSP reference suffix 988 does not match checkout CHK-402.",
+  };
 }

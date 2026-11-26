@@ -1,6 +1,6 @@
 # RefundGuard
 
-**Concurrent Mozaik AI agents with mid-flight `InterceptionHandler` gating that prevent Black Friday double-payouts and wrong-seller refund misallocations before money moves.**
+**Concurrent Mozaik AI agents with mid-flight `InterceptionHandler` gating that prevent wrong-seller refund misallocations, stale post-acceptance approvals, and unsafe cross-system refund proposals before payouts release.**
 
 Built solo for the **JigJoy Black Friday AI Hackathon (26-27 November 2026, Agents in Finance)** on `@mozaik-ai/core@6.0.0`.
 
@@ -8,117 +8,115 @@ Built solo for the **JigJoy Black Friday AI Hackathon (26-27 November 2026, Agen
 
 ## The Finance Problem
 
-Two costly Black Friday failures slip straight past traditional reconciliation checks:
+Two costly marketplace payout failures slip past standard batch-total reconciliation:
 
-1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in one checkout (`CHK-402`). The processor confirms a KSh 10,000 refund and settles **KSh 90,000** for the batch. The payout draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances exactly to KSh 90,000** and passes batch-total reconciliation, even though an unstructured warehouse return note proves **Seller A's** jacket came back (`A: KSh 50,000 / B: KSh 40,000`).
-2. **Mid-Flight Chargeback Double-Payout:** A customer demands an immediate Black Friday refund via support while an asynchronous issuing-bank chargeback webhook (`VISA_13.1`, different external reference ID) arrives mid-review. Without concurrent monitoring and pre-execution interception, the refund desk approves the store refund on top of the open bank dispute, causing an irrecoverable **2x payout loss**.
-
-Neither failure is solved by a ledger total check or a single internal database foreign key: physical warehouse intake notes arrive as unstructured text, and bank chargebacks originate asynchronously outside the store's ticketing system.
+1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in one checkout (`CHK-402`). The processor confirms a KSh 10,000 refund and settles **KSh 90,000** net for the batch. The payout draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances exactly to KSh 90,000** and passes batch-total checks, even though unstructured warehouse notes prove **Seller A's** jacket came back (`A: KSh 50,000 / B: KSh 40,000`). If a late QC warehouse correction arrives mid-review or even after initial acceptance, any superseded approval must expire immediately.
+2. **Unsafe Cross-System Refund Proposals During Active Disputes:** While card processors such as Stripe already restrict issuing a refund on the same charge once a dispute is open ([Stripe Disputes Docs](https://docs.stripe.com/disputes/how-disputes-work#during-the-dispute)), marketplace support desks, OMS queues, and seller-payout drafts operate across separate systems. RefundGuard verifies payment linkage (`cardLast4`, checkout/settlement reference, amount within capture, and `status === "OPEN"`) before blocking an unsafe cross-system refund or payout proposal, asks an operator to verify ambiguous partial matches, and ignores unrelated or closed disputes.
 
 ---
 
 ## How Our Agents Run Concurrently on Mozaik
 
-RefundGuard uses `@mozaik-ai/core@6.0.0`'s core concurrency primitives, not a sequential pipeline and not one chatbot with tools:
+RefundGuard uses `@mozaik-ai/core@6.0.0`'s concurrency primitives, not a sequential pipeline and not one chatbot with tools:
 
 ```mermaid
 flowchart LR
   Op["OperatorFeed (Human)\nPublishes case.opened & evidence.updated"]
-  State["RefundGuardState\n(Mozaik RuntimeState)\n• immutable source records\n• monotonic epoch counter\n• sentinelFindings map\n• SemanticEvent timeline"]
-  A1["Agent 1: RefundDeskAgent\n(non-blocking runLoop)\nReads customer ticket + policy + draft\nCalls propose_refund(...)"]
-  A2["Agent 2: DisputeFulfillmentSentinel\n(non-blocking runLoop)\nReads free-text warehouse notes +\nasync bank chargeback narratives\nCalls publish_sentinel_finding(...)"]
+  State["RefundGuardState\n(Mozaik RuntimeState)\n• immutable source records\n• monotonic epoch counter\n• readiness invalidation\n• sentinelFindings map"]
+  A1["Agent 1: RefundDeskAgent\n(non-blocking runLoop)\nReads ticket + policy + draft\nCalls propose_refund(...)"]
+  A2["Agent 2: DisputeFulfillmentSentinel\n(non-blocking runLoop)\nParses warehouse notes +\nverifies PSP dispute links\nCalls publish_sentinel_finding(...)"]
   Gate["RefundInterceptionGate\n(awaited InterceptionHandler\non nextStateId === 'function_call')"]
   Calc["Deterministic Ledger Engine\n(src/finance/ledger.ts)\nPure integer KSh math +\nsource ID citations"]
   Obs["AuditObserver\nRecords overlap ms &\nSemanticEvent trace"]
 
   Op -- "case.opened" --> A1
-  Op -- "case.opened & mid-flight evidence.updated" --> A2
+  Op -- "case.opened & evidence.updated" --> A2
+  Op -- "post-acceptance invalidation" --> A1
   A2 -- "writes epoch finding" --> State
   A1 -- "attempts function_call: propose_refund" --> Gate
-  Gate -- "reads latest epoch & finding" --> State
+  Gate -- "reads current epoch & dispute link" --> State
   Gate -- "BLOCK & REWRITE (wrong seller / stale epoch)" --> A1
-  Gate -- "HALT (missing evidence / chargeback collision)" --> Calc
-  Gate -- "CLEAR (verified match)" --> Calc
+  Gate -- "HALT (missing evidence / active or ambiguous dispute)" --> Calc
+  Gate -- "CLEAR (current-epoch verified match)" --> Calc
   A1 -. "SemanticEvents" .-> Obs
   A2 -. "SemanticEvents" .-> Obs
 ```
 
-### Why Both Agents & Concurrency Are Genuine
-- **Two distinct unstructured reasoning tasks:** `RefundDeskAgent` interprets customer support tickets and Black Friday refund policy; `DisputeFulfillmentSentinel` independently interprets free-text warehouse inspection notes (including negation and reused boxes) and correlates external bank chargeback narratives without shared ticket IDs.
-- **True non-blocking parallel execution:** Publishing `case.opened` fans out synchronously to both agents' `SituationHandler`s, which launch independent `runLoop`s concurrently. `AuditObserver` measures actual wall-clock overlap between both agents' loop windows on every run (verified `5/5` in tests).
-- **Causal mid-flight interception (`InterceptionHandler`):** `RefundDeskAgent` runs with `RefundInterceptionGate` attached as the 4th argument to `runLoop`. Before `propose_refund` can execute, Mozaik pauses the `function_call` transition and awaits `handle()`. The gate inspects `RefundGuardState.epoch` and `DisputeFulfillmentSentinel`'s latest finding:
-  - **Wrong seller (`WRONG_SELLER_ALLOCATION`)** or **late correction (`SUPERSEDED_EVIDENCE`, `proposalEpoch < currentEpoch`)** -> blocks the tool call, injects Sentinel's verified findings, and rewrites the transition to `message_received` so Agent 1 re-plans on the latest epoch.
-  - **Missing receipt (`MISSING_EVIDENCE`)** or **chargeback collision (`DOUBLE_PAYOUT_BLOCKED`)** -> halts into `model_message` (fail-closed human review); `propose_refund` never executes.
+### Key Concurrency & Safety Invariants
+- **Two distinct unstructured reasoning tasks:** `RefundDeskAgent` interprets customer support tickets and return policy; `DisputeFulfillmentSentinel` concurrently interprets free-text warehouse intake notes (including negation and reused boxes) and correlates incoming PSP dispute payloads.
+- **True non-blocking overlap:** `case.opened` fans out synchronously to both agents' `SituationHandler`s, launching independent `runLoop`s in parallel (`AuditObserver` measures actual wall-clock overlap, verified `5/5`).
+- **Pre-execution `InterceptionHandler` (`RefundInterceptionGate`):** Hooks `nextStateId === "function_call"` (`propose_refund`), awaits Sentinel for the latest `epoch`, and blocks/rewrites wrong-seller or stale-epoch proposals or halts fail-closed on missing evidence, active linked disputes, or ambiguous dispute matches.
+- **Post-acceptance readiness invalidation:** If relevant evidence changes *after* `proposal.accepted`, `RefundGuardState` immediately archives the prior proposal as superseded, clears readiness, increments `epoch`, and requires revalidation. Before returning any ready verdict, [`runRefundGuardCase`](src/engine/run-case.ts) verifies that both `acceptedProposal.epoch` and `sentinelFinding.epoch` match `state.epoch`; if revalidation cannot complete, it fails closed to `PENDING_REVALIDATION`.
 
 ---
 
-## Quickstart (Zero API Key Required)
+## Quickstart (Reproducible Zero-Key Path + Live Model Runner)
 
 Requires **Node.js 20+** (tested on Node 22).
 
 ```bash
 npm install
-npm test
+npm test          # 12 automated tests (6 core + 6 audit regressions)
+npm run compare   # Ticket+Draft vs 1-Agent Snapshot vs Concurrent RefundGuard
+npm start         # Interactive dark UI on http://localhost:3000
 ```
 
-Run the side-by-side **Single-Agent Baseline vs. Concurrent RefundGuard** benchmark:
+### Launcher Fallback (`node --import tsx`)
+If your environment hits an IPC error running the `tsx` CLI directly, invoke Node's loader flag instead:
 
 ```bash
-npm run compare
+node --import tsx src/server.ts
+node --import tsx src/compare.ts
+node --import tsx src/cli.ts case-4-late-correction-midflight
 ```
 
-Launch the interactive **Live Judge Demo UI**:
+### Live Model Verification (`npm run trace:live`)
+- **Offline judge reproducibility (default):** When no API key is configured, RefundGuard runs on `RefundGuardMockRunner` (a Mozaik `InferenceRunner` modeled on `mozaik-examples/custom-inference-runner`) that parses the live prompt text deterministically.
+- **Real provider run:** Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` in `.env` (see [`.env.example`](.env.example)), then capture a real model trace:
 
 ```bash
-npm start
-# Open http://localhost:3000
+npm run trace:live
+# or fallback:
+node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum
 ```
 
-Run the CLI across all 5 cases (or a single case ID):
-
-```bash
-npm run cli
-npm run cli -- case-4-late-correction-midflight
-```
-
-### Live LLM Mode vs. Deterministic Offline Mode
-- **Default (`REFUND_GUARD_MODE=auto`):** If `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` is set in `.env`, RefundGuard automatically runs live LLM inference through `@mozaik-ai/core@6.0.0` (`gpt-5.4-mini`, `claude-haiku-4-5`, or `gemini-3.5-flash`).
-- **Zero-key judge mode:** When no API key is configured, RefundGuard uses `RefundGuardMockRunner` (a real Mozaik `InferenceRunner` modeled on `mozaik-examples/custom-inference-runner`) that parses the actual warehouse notes, tickets, chargebacks, and interception feedback in the prompt, so **every test, live UI text edit, and mid-flight injection works deterministically offline**.
-
-See [`.env.example`](.env.example) for environment options.
+This runs Case 2 against the configured provider (`gpt-5.4-mini`, `claude-haiku-4-5`, or `gemini-3.5-flash`), verifies that both Mozaik agents invoke their tools, verifies `RefundInterceptionGate` blocks the wrong Seller B proposal and `RefundDeskAgent` submits the revised Seller A proposal, and writes `traces/live-run-trace.json`.
 
 ---
 
-## 90-Second Judge Walkthrough
+## 90-Second Demo Flow
 
-1. Run `npm start` and open `http://localhost:3000`.
-2. **Case 2 (Zero-Sum Trap)** runs automatically: the draft balances at **KSh 90,000** (`A: 60k / B: 30k`), both agent lanes stream side-by-side, `RefundInterceptionGate` blocks the Seller B debit, and the grounded ledger corrects payouts to **A: KSh 50,000 / B: KSh 40,000** (same KSh 90,000 total).
-3. **Flip an input live:** Click **"Preset: Seller B Boots"** in the warehouse note box (or edit the text yourself) and click **Run Concurrent Review** → watch the interception disappear and the verdict flip cleanly to `READY_FOR_HUMAN_APPROVAL` (`A: 60k / B: 30k`).
-4. **Inject a mid-flight bank chargeback:** Set **Mid-Flight Async Event** to **"Inject PSP Chargeback Webhook Mid-Run"** and click **Run Concurrent Review** → watch epoch bump `1 → 2` mid-run, the Sentinel correlate the dispute, and `RefundInterceptionGate` freeze the refund (`FROZEN_DISPUTE_COLLISION`, **KSh 10,000 double-payout prevented**).
-5. Click **"Run 5-Case Baseline Benchmark"** or **"Export JSON"** to inspect the complete source-cited evidence bundle.
+1. Run `npm start` (or `node --import tsx src/server.ts`) and open `http://localhost:3000`.
+2. **Open on the KSh 90,000 zero-sum batch (Case 2 / Case 4):** Draft payouts are **A: KSh 60,000 / B: KSh 30,000** (total KSh 90,000). Show the **Concurrent Execution Timeline** where `RefundDeskAgent` and `DisputeFulfillmentSentinel` overlap.
+3. **Trigger Case 4 (Mid-Flight Correction):** Watch the QC warehouse correction arrive mid-run (`epoch 1 -> 2`), expire the stale Seller B proposal (`SUPERSEDED_EVIDENCE`), and recompute payouts to **A: KSh 50,000 / B: KSh 40,000** while the batch total stays **KSh 90,000**.
+4. **Open "Inspect Source Records":** Show the exact warehouse notes (`WH-404-V1`, `WH-404-V2`) and settlement records (`STL-PAY-402`, `STL-REF-402`) grounding every figure.
+5. **Show a negative control:** Switch to **Case 1 (Clean Pass)** and select **"Unrelated dispute (card 8812 / ref 999)"** -> confirm the unrelated dispute is ignored (`READY_FOR_HUMAN_APPROVAL`), or switch to **Case 3 (Missing Evidence)** to show the fail-closed hold.
+6. End with `npm test` (12/12 passing) and `npm run compare`.
 
 ---
 
 ## Fair Baseline Comparison (`npm run compare`)
 
-We compare concurrent **RefundGuard** against a **Single-Agent Sequential Baseline** (`src/engine/baseline.ts`) using the **exact same deterministic ledger calculator and inference runner**, but with a single sequential agent and no concurrent Sentinel or `InterceptionHandler`:
+To avoid conflating evidence access with concurrency, `npm run compare` runs **two explicitly labeled baselines** alongside RefundGuard (without summing artificial penalties across synthetic fixtures):
 
-| Scenario | Single-Agent Baseline | RefundGuard (Concurrent Mozaik) | Interception Fired | Concurrent Overlap | Baseline Error | RefundGuard Error |
-| :--- | :--- | :--- | :--- | :---: | ---: | ---: |
-| 1. Clean Pass | PASS (`SELLER-A`) | PASS (`READY_FOR_HUMAN_APPROVAL`) | none | YES | KSh 0 | KSh 0 |
-| 2. Zero-Sum Trap | FAIL (`SELLER-B`) | PASS (`CORRECTED_READY_FOR_APPROVAL`) | `WRONG_SELLER_ALLOCATION` | YES | KSh 10,000 | KSh 0 |
-| 3. Missing Evidence | FAIL (`SELLER-B`) | PASS (`HOLD_MISSING_EVIDENCE`) | `MISSING_EVIDENCE` | YES | KSh 10,000 | KSh 0 |
-| 4. Mid-Flight Correction | FAIL (`SELLER-B`) | PASS (`CORRECTED_READY_FOR_APPROVAL`) | `SUPERSEDED_EVIDENCE` | YES | KSh 10,000 | KSh 0 |
-| 5. Chargeback Collision | FAIL (`SELLER-A`) | PASS (`FROZEN_DISPUTE_COLLISION`) | `DOUBLE_PAYOUT_BLOCKED` | YES | KSh 10,000 | KSh 0 |
-| **Total** | **1 / 5 correct** | **5 / 5 correct** | **4 interceptions** | **5 / 5** | **KSh 40,000** | **KSh 0** |
+| Scenario | Ticket-and-Draft Baseline *(no warehouse/dispute feed)* | 1-Agent Snapshot Baseline *(same `t=0` ticket, draft, warehouse, dispute & policy)* | RefundGuard *(2 concurrent Mozaik agents + `InterceptionGate`)* | Concurrent Overlap |
+| :--- | :--- | :--- | :--- | :---: |
+| 1. Clean Pass | PASS (`SELLER-A`) | PASS (`SELLER-A`) | PASS (`SELLER-A`) | YES |
+| 2. Zero-Sum Trap | FAIL (`SELLER-B`) | PASS (`SELLER-A`) | PASS (`SELLER-A`) | YES |
+| 3. Missing Evidence | FAIL (`SELLER-B`) | PASS (`HOLD_MISSING_EVIDENCE`) | PASS (`HOLD_MISSING_EVIDENCE`) | YES |
+| 4. Mid-Flight Correction | FAIL (`SELLER-B`) | FAIL (`SELLER-B` stale `epoch 1`) | PASS (`SELLER-A` at `epoch 2`) | YES |
+| 5. Dispute Collision | FAIL (`SELLER-A`) | FAIL (`SELLER-A` unsafe refund) | PASS (`FROZEN_DISPUTE_COLLISION`) | YES |
+| **Score** | **1 / 5** | **3 / 5** *(isolates concurrency to mid-flight Cases 4 & 5)* | **5 / 5** | **5 / 5** |
 
 ---
 
-## Financial Grounding & Data Safety
+## Financial Grounding & Explicit Hold Policy
 
-- **Zero LLM arithmetic:** All amounts are stored as integer Kenyan Shillings (KSh) and calculated strictly in [`src/finance/ledger.ts`](src/finance/ledger.ts).
-- **Source provenance on every figure:** Every seller allocation line cites its exact source record IDs (`DRF-*`, `TKT-*`, `STL-*`, `LINE-*`, `WH-*`, `DSP-*`).
-- **Synthetic data only:** All orders, settlements, seller accounts, warehouse logs, and PSP chargebacks are 100% synthetic. No real customer data, no real accounts, and no real money movement occur.
+- **Zero LLM arithmetic:** All amounts are integer Kenyan Shillings (KSh) computed in [`src/finance/ledger.ts`](src/finance/ledger.ts).
+- **Requested Refund vs. Held Reserve:** RefundGuard always reports `requestedRefundKsh` separately from `heldReserveKsh` along with `holdPolicyExplanation`:
+  - **Active linked dispute (`FROZEN_DISPUTE_COLLISION`)** with an identified seller line: blocks the unsafe **KSh 10,000** cross-system refund proposal and holds only that seller's disputed **KSh 10,000** checkout line (leaving the undisputed seller's KSh 40,000 payout clear).
+  - **Missing evidence / ambiguous dispute / pending revalidation:** holds unsettled checkout lines in reserve because seller attribution is unresolved, while clearly displaying the **KSh 10,000** requested refund separately.
+- **Synthetic data only:** All orders, settlements, seller accounts, warehouse notes, and disputes are synthetic. No real accounts or money movement occur.
 
 ---
 
@@ -127,25 +125,27 @@ We compare concurrent **RefundGuard** against a **Single-Agent Sequential Baseli
 ```text
 src/
   finance/
-    types.ts           # Immutable source record, finding, interception & ledger types
-    ledger.ts          # Pure deterministic integer-KSh calculator & citation builder
-    fixtures.ts        # 5 synthetic Black Friday scenarios
+    types.ts           # Immutable source records, dispute match, verdict & ledger types
+    dispute-match.ts   # Deterministic payment-to-dispute linkage verifier
+    ledger.ts          # Pure deterministic integer-KSh calculator & explicit hold policy
+    fixtures.ts        # 5 Black Friday scenarios + unrelated/ambiguous dispute fixtures
   mozaik/
-    runtime.ts         # RefundGuardState (RuntimeState subclass), epoch & overlap tracker
-    interception.ts    # Awaited InterceptionHandler guarding `propose_refund`
+    runtime.ts         # RefundGuardState (RuntimeState), epoch & readiness invalidation
+    interception.ts    # Awaited InterceptionHandler on `propose_refund`
     runner.ts          # Dual live LLM / deterministic MockInferenceRunner config
     agents/
-      refund-desk.ts   # Agent 1: customer ticket + policy -> propose_refund
-      sentinel.ts      # Agent 2: warehouse notes + bank chargebacks -> publish_sentinel_finding
-      observer.ts      # AuditObserver tracking concurrent loop overlap & SemanticEvents
+      refund-desk.ts   # Agent 1: ticket + policy -> propose_refund (+ revalidation loop)
+      sentinel.ts      # Agent 2: warehouse notes + dispute links -> publish_sentinel_finding
+      observer.ts      # AuditObserver measuring concurrent overlap & SemanticEvents
   engine/
-    run-case.ts        # Concurrent Mozaik orchestrator with live override & injection support
-    baseline.ts        # Fair single-agent sequential baseline for comparison
+    run-case.ts        # Concurrent Mozaik runner + strict current-epoch readiness invariant
+    baseline.ts        # Ticket-and-Draft Baseline + fair 1-Agent Snapshot Baseline
   cli.ts               # Terminal runner (`npm run cli`)
-  compare.ts           # Side-by-side benchmark (`npm run compare`)
+  compare.ts           # Three-way benchmark (`npm run compare`)
+  live-trace.ts        # Real provider verification harness (`npm run trace:live`)
   server.ts            # Lightweight Node HTTP + SSE server (`npm start`)
 public/
-  index.html           # Interactive judge demo UI
+  index.html           # Minimalist obsidian dark-mode interactive demo UI
 tests/
-  refund-guard.test.ts # 6 proving Vitest tests (`npm test`)
+  refund-guard.test.ts # 12 Vitest tests (6 core + 6 audit regressions)
 ```

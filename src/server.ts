@@ -3,9 +3,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getScenarioById, SCENARIOS } from "./finance/fixtures.js";
+import {
+  createAmbiguousDisputeFixture,
+  createUnrelatedDisputeFixture,
+  getScenarioById,
+  SCENARIOS,
+} from "./finance/fixtures.js";
 import type { MidFlightInjection, SellerId } from "./finance/types.js";
-import { runSingleAgentBaseline } from "./engine/baseline.js";
+import {
+  runSingleAgentSnapshotBaseline,
+  runTicketAndDraftBaseline,
+} from "./engine/baseline.js";
 import {
   buildInjectedChargeback,
   buildInjectedWarehouseCorrection,
@@ -25,6 +33,8 @@ interface RunRequestBody {
     | "scenario-default"
     | "none"
     | "chargeback"
+    | "chargeback-unrelated"
+    | "chargeback-ambiguous"
     | "correction-seller-a"
     | "correction-seller-b";
   modeOverride?: "auto" | "live" | "mock";
@@ -79,18 +89,22 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/compare") {
       const results = [];
       for (const scenario of SCENARIOS) {
-        const [baseline, guard] = await Promise.all([
-          runSingleAgentBaseline(scenario, { latencyScale: 0.4 }),
+        const [ticketDraft, snapshot, guard] = await Promise.all([
+          runTicketAndDraftBaseline(scenario, { latencyScale: 0.4 }),
+          runSingleAgentSnapshotBaseline(scenario, { latencyScale: 0.4 }),
           runRefundGuardCase(scenario, { latencyScale: 0.4 }),
         ]);
         results.push({
           scenarioId: scenario.id,
           shortLabel: scenario.shortLabel,
           title: scenario.title,
-          baseline: {
-            verdict: baseline.verdict,
-            debitSellerId: baseline.acceptedProposal?.debitSellerId ?? null,
-            durationMs: baseline.durationMs,
+          ticketDraft: {
+            verdict: ticketDraft.verdict,
+            debitSellerId: ticketDraft.acceptedProposal?.debitSellerId ?? null,
+          },
+          snapshot: {
+            verdict: snapshot.verdict,
+            debitSellerId: snapshot.acceptedProposal?.debitSellerId ?? null,
           },
           guard: {
             verdict: guard.verdict,
@@ -99,8 +113,8 @@ const server = createServer(async (req, res) => {
             concurrentOverlapVerified: guard.concurrentOverlapVerified,
             overlapDetail: guard.overlapDetail,
             misallocationCaughtKsh: guard.ledger.misallocationCaughtKsh,
-            doublePayoutPreventedKsh: guard.ledger.doublePayoutPreventedKsh,
-            heldAmountKsh: guard.ledger.heldAmountKsh,
+            blockedUnsafeRefundKsh: guard.ledger.blockedUnsafeRefundKsh,
+            heldReserveKsh: guard.ledger.heldReserveKsh,
             durationMs: guard.durationMs,
           },
         });
@@ -121,6 +135,18 @@ const server = createServer(async (req, res) => {
           delayMs: 110,
           kind: "CHARGEBACK_WEBHOOK",
           chargeback: buildInjectedChargeback(scenario),
+        };
+      } else if (body.injectionMode === "chargeback-unrelated") {
+        overrideInjection = {
+          delayMs: 110,
+          kind: "CHARGEBACK_WEBHOOK",
+          chargeback: createUnrelatedDisputeFixture(),
+        };
+      } else if (body.injectionMode === "chargeback-ambiguous") {
+        overrideInjection = {
+          delayMs: 110,
+          kind: "CHARGEBACK_WEBHOOK",
+          chargeback: createAmbiguousDisputeFixture(),
         };
       } else if (body.injectionMode === "correction-seller-a") {
         overrideInjection = {
@@ -148,7 +174,33 @@ const server = createServer(async (req, res) => {
 
       const latencyScale = body.modeOverride === "live" ? 1 : 3.2;
 
-      const [report, baseline] = await Promise.all([
+      const overriddenScenario = {
+        ...scenario,
+        draft:
+          body.overrideDraftSellerId &&
+          body.overrideDraftSellerId !== scenario.draft.debitedSellerId
+            ? {
+                ...scenario.draft,
+                debitedSellerId: body.overrideDraftSellerId,
+              }
+            : scenario.draft,
+        initialWarehouseNote:
+          body.customWarehouseNoteText &&
+          body.customWarehouseNoteText.trim().length > 0 &&
+          body.customWarehouseNoteText.trim() !== scenario.initialWarehouseNote.text.trim()
+            ? {
+                ...scenario.initialWarehouseNote,
+                noteId: `${scenario.initialWarehouseNote.noteId}-EDIT`,
+                text: body.customWarehouseNoteText.trim(),
+              }
+            : scenario.initialWarehouseNote,
+        midFlightInjection:
+          overrideInjection === undefined
+            ? scenario.midFlightInjection
+            : (overrideInjection ?? undefined),
+      };
+
+      const [report, snapshotBaseline] = await Promise.all([
         runRefundGuardCase(scenario, {
           modeOverride: body.modeOverride,
           latencyScale,
@@ -157,27 +209,27 @@ const server = createServer(async (req, res) => {
           overrideInjection,
           onTimeline: (entry) => writeSse("timeline", entry),
         }),
-        runSingleAgentBaseline(
-          {
-            ...scenario,
-            draft:
-              body.overrideDraftSellerId &&
-              body.overrideDraftSellerId !== scenario.draft.debitedSellerId
-                ? {
-                    ...scenario.draft,
-                    debitedSellerId: body.overrideDraftSellerId,
-                  }
-                : scenario.draft,
-            midFlightInjection:
-              overrideInjection === undefined
-                ? scenario.midFlightInjection
-                : (overrideInjection ?? undefined),
-          },
-          { modeOverride: body.modeOverride, latencyScale: 0.4 },
-        ),
+        runSingleAgentSnapshotBaseline(overriddenScenario, {
+          modeOverride: body.modeOverride,
+          latencyScale: 0.4,
+        }),
       ]);
 
-      writeSse("report", { report, baseline });
+      writeSse("report", {
+        report,
+        baseline: snapshotBaseline,
+        sourceRecords: {
+          settlements: overriddenScenario.settlements,
+          orderLines: overriddenScenario.orderLines,
+          warehouseNotes: overriddenScenario.midFlightInjection?.warehouseNote
+            ? [
+                overriddenScenario.initialWarehouseNote,
+                overriddenScenario.midFlightInjection.warehouseNote,
+              ]
+            : [overriddenScenario.initialWarehouseNote],
+          dispute: overriddenScenario.midFlightInjection?.chargeback ?? overriddenScenario.initialChargeback ?? null,
+        },
+      });
       res.end();
       return;
     }
