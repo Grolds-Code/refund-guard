@@ -1,0 +1,25 @@
+{
+  "name": "refund-guard",
+  "version": "1.0.0",
+  "description": "Concurrent Mozaik AI agents with mid-flight interception that prevent Black Friday double-payouts and wrong-seller refund misallocations.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "cli": "tsx src/cli.ts",
+    "compare": "tsx src/compare.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mozaik-ai/core": "6.0.0",
+    "dotenv": "^17.4.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.1"
+  }
+}
