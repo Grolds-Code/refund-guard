@@ -130,6 +130,7 @@ export async function runRefundGuardCase(
       currentEpochFinding ?? state.getMostRecentAnyEpochFinding(),
       latestRelevantDispute?.evaluation ?? state.lastDisputeEvaluation,
       latestRelevantDispute?.chargeback.amountKsh ?? null,
+      state.getLatestWarehouseNote().noteId,
     );
     const overlap = state.computeOverlapMetrics();
 

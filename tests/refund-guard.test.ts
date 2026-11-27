@@ -1,8 +1,13 @@
 import {
+  createHuman,
   FunctionCallItem,
   ModelContext,
+  SemanticEvent,
+  UserMessageItem,
   type ExecutableTransition,
   type InferenceInput,
+  type InferenceOutput,
+  type InferenceRunner,
 } from "@mozaik-ai/core";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
@@ -23,9 +28,18 @@ import {
   buildInjectedChargeback,
   buildInjectedWarehouseCorrection,
   runRefundGuardCase,
+  type PostAcceptanceInjector,
 } from "../src/engine/run-case.js";
+import { createAuditObserver } from "../src/mozaik/agents/observer.js";
+import { createRefundDeskAgent } from "../src/mozaik/agents/refund-desk.js";
+import { createSentinelAgent } from "../src/mozaik/agents/sentinel.js";
 import { RefundInterceptionGate } from "../src/mozaik/interception.js";
-import { RefundGuardState } from "../src/mozaik/runtime.js";
+import {
+  MOCK_MODEL_NAME,
+  RefundGuardMockRunner,
+  resolveInferenceMode,
+} from "../src/mozaik/runner.js";
+import { createRefundGuardRuntime, RefundGuardState } from "../src/mozaik/runtime.js";
 import { createRefundGuardServer } from "../src/server.js";
 
 function makeDirectProposalTransition(args: Record<string, unknown>): ExecutableTransition {
@@ -946,6 +960,242 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
       );
       expect(next.nextStateId).toBe("model_message");
       expect(state.verdict).toBe("HOLD_MISSING_EVIDENCE");
+    }
+  });
+
+  // --- Final Pre-Submission Blocker Regressions (5/5) ---
+
+  it("Blocker 1: sealed carton with external sticker and future-return promise both return HOLD_MISSING_EVIDENCE", async () => {
+    const case1 = getScenarioById("case-1-clean-allocation");
+    const sealed = await runRefundGuardCase(case1, {
+      modeOverride: "mock",
+      latencyScale: 0.2,
+      customWarehouseNoteText:
+        "Carton remains sealed. External sticker reads JKT-NVY-L (Seller A).",
+    });
+    expect(sealed.verdict).toBe("HOLD_MISSING_EVIDENCE");
+    expect(sealed.acceptedProposal).toBeNull();
+
+    const futurePromise = await runRefundGuardCase(case1, {
+      modeOverride: "mock",
+      latencyScale: 0.2,
+      customWarehouseNoteText: "Customer will send back JKT-NVY-L (Seller A) next week.",
+    });
+    expect(futurePromise.verdict).toBe("HOLD_MISSING_EVIDENCE");
+    expect(futurePromise.acceptedProposal).toBeNull();
+  });
+
+  it("Blocker 2: post-run QC correction followed by matching dispute does NOT reuse obsolete WH-505 finding to attribute reserve to Seller A", async () => {
+    const case5 = getScenarioById("case-5-chargeback-collision");
+    let sessionInjector: PostAcceptanceInjector | undefined;
+
+    const initialReport = await runRefundGuardCase(case5, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      overrideInjection: null,
+      onSessionReady: (inj) => {
+        sessionInjector = inj;
+      },
+    });
+    expect(initialReport.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
+    expect(sessionInjector).toBeDefined();
+
+    // Post-run QC correction to Seller B (epoch 1 -> 2), then matching dispute (epoch 2 -> 3)
+    sessionInjector!.injectWarehouseCorrection(
+      buildInjectedWarehouseCorrection(case5, "SELLER-B"),
+    );
+    sessionInjector!.injectChargeback(buildInjectedChargeback(case5));
+
+    const snap = sessionInjector!.getCurrentSnapshot();
+    expect(snap.epoch).toBe(3);
+    expect(snap.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(snap.approvable).toBe(false);
+    // Must hold BOTH sellers (KSh 20,000) rather than attributing Seller A from obsolete WH-505
+    const sellerA = snap.report.ledger.lines.find((l) => l.sellerId === "SELLER-A")!;
+    const sellerB = snap.report.ledger.lines.find((l) => l.sellerId === "SELLER-B")!;
+    expect(sellerA.supportedNetPayoutKsh).toBe(50_000);
+    expect(sellerB.supportedNetPayoutKsh).toBe(30_000);
+    expect(snap.report.ledger.heldReserveKsh).toBe(20_000);
+  });
+
+  it("Blocker 3: out-of-order CLOSED_WON (15:30) blocks older OPEN (14:30), and CHK-402 closure clears 402 OPEN while mismatched closure stays rejected", () => {
+    const case1 = getScenarioById("case-1-clean-allocation");
+    const state1 = new RefundGuardState(case1, "mock", MOCK_MODEL_NAME);
+
+    const closedFirst: ChargebackWebhookRecord = {
+      disputeId: "DSP-OOO-1",
+      status: "CLOSED_WON",
+      receivedAt: "2026-11-26T15:30:00+03:00",
+      pspReferenceSuffix: "402",
+      paymentSettlementId: "STL-PAY-402",
+      cardLast4: "4421",
+      amountKsh: 10_000,
+      reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
+      narrative: "Resolved in merchant favor at 15:30.",
+    };
+    const olderOpen: ChargebackWebhookRecord = {
+      ...closedFirst,
+      status: "OPEN",
+      receivedAt: "2026-11-26T14:30:00+03:00",
+      narrative: "Delayed original OPEN webhook from 14:30.",
+    };
+
+    expect(state1.addChargebackWebhook(closedFirst).relevant).toBe(false);
+    expect(state1.addChargebackWebhook(olderOpen).relevant).toBe(false);
+    expect(state1.getLatestRelevantChargeback()).toBeNull();
+
+    // Equivalent checkout ref ("CHK-402" vs "402") clears original OPEN
+    const state2 = new RefundGuardState(case1, "mock", MOCK_MODEL_NAME);
+    const openShortRef: ChargebackWebhookRecord = {
+      ...olderOpen,
+      disputeId: "DSP-REF-EQ",
+      pspReferenceSuffix: "402",
+    };
+    const closeFullRef: ChargebackWebhookRecord = {
+      ...closedFirst,
+      disputeId: "DSP-REF-EQ",
+      pspReferenceSuffix: "CHK-402",
+    };
+    expect(state2.addChargebackWebhook(openShortRef).relevant).toBe(true);
+    expect(state2.getLatestRelevantChargeback()?.evaluation.matchState).toBe("VERIFIED_ACTIVE_MATCH");
+    expect(state2.addChargebackWebhook(closeFullRef).relevant).toBe(true);
+    expect(state2.getLatestRelevantChargeback()).toBeNull();
+
+    // Genuinely mismatched ref ("999") is still rejected
+    const state3 = new RefundGuardState(case1, "mock", MOCK_MODEL_NAME);
+    state3.addChargebackWebhook(openShortRef);
+    const badRefClose: ChargebackWebhookRecord = {
+      ...closedFirst,
+      disputeId: "DSP-REF-EQ",
+      pspReferenceSuffix: "999",
+    };
+    expect(state3.addChargebackWebhook(badRefClose).relevant).toBe(false);
+    expect(state3.getLatestRelevantChargeback()?.evaluation.matchState).toBe("VERIFIED_ACTIVE_MATCH");
+  });
+
+  it("Blocker 4: observer tags the actual finishing loop by loopId when epoch-2 Sentinel finishes before delayed epoch-1 Sentinel", async () => {
+    const scenario = getScenarioById("case-4-late-correction-midflight");
+    const baseMock = new RefundGuardMockRunner(0.2);
+
+    // Delay ONLY epoch-1 Sentinel inference by 420ms so epoch-2 Sentinel (started at 30ms) finishes FIRST
+    const delayedRunner: InferenceRunner = {
+      async run(input: InferenceInput): Promise<InferenceOutput> {
+        const toolNames = new Set((input.tools ?? []).map((t) => t.name));
+        const userText = input.context
+          .getItems()
+          .filter((item): item is UserMessageItem => item instanceof UserMessageItem)
+          .map((m) => m.content.text)
+          .join("\n");
+        if (toolNames.has("publish_sentinel_finding") && userText.includes("CURRENT_EPOCH: 1")) {
+          await new Promise((r) => setTimeout(r, 420));
+        }
+        return baseMock.run(input);
+      },
+      stream(input: InferenceInput) {
+        return baseMock.stream(input);
+      },
+    };
+
+    const resolved = resolveInferenceMode({ modeOverride: "mock", latencyScale: 0.2 });
+    const runtime = createRefundGuardRuntime();
+    const state = new RefundGuardState(scenario, "mock", MOCK_MODEL_NAME);
+    runtime.initializeRuntime({
+      state,
+      inferenceRunnerConfig: {
+        supportedModels: resolved.inferenceRunnerConfig!.supportedModels,
+        runner: delayedRunner,
+      },
+    });
+
+    const coordinator = createHuman({ name: "OperatorFeed", capabilities: [], handlers: [] });
+    const refundDesk = createRefundDeskAgent(runtime, state);
+    const sentinel = createSentinelAgent(runtime, state);
+    const observer = createAuditObserver(state, refundDesk.getId(), sentinel.getId());
+    runtime.join(coordinator);
+    runtime.join(refundDesk);
+    runtime.join(sentinel);
+    runtime.join(observer);
+
+    setTimeout(() => {
+      const note = scenario.midFlightInjection!.warehouseNote!;
+      const { epoch, invalidatedPriorApproval } = state.addWarehouseCorrection(note);
+      runtime.sendEvent(
+        SemanticEvent.create("evidence.updated", coordinator.getId(), {
+          epoch,
+          kind: "WAREHOUSE_CORRECTION",
+          sourceId: note.noteId,
+          invalidatedPriorApproval,
+        }),
+        coordinator.getId(),
+      );
+    }, 30);
+
+    runtime.sendEvent(
+      SemanticEvent.create("case.opened", coordinator.getId(), {
+        scenarioId: scenario.id,
+        epoch: 1,
+      }),
+      coordinator.getId(),
+    );
+
+    await state.waitUntilComplete(8_000);
+
+    const sentinelCompletions = state.timeline.filter(
+      (e) =>
+        e.actor === "DisputeFulfillmentSentinel" &&
+        (e.type === "agent.completed" || e.type === "agent.completed_stale"),
+    );
+    expect(sentinelCompletions).toHaveLength(2);
+    // Epoch 2 finished FIRST -> must be tagged agent.completed (NOT stale!)
+    expect(sentinelCompletions[0].type).toBe("agent.completed");
+    expect(sentinelCompletions[0].data?.loopEpoch).toBe(2);
+    // Delayed Epoch 1 finished LATER -> must be tagged agent.completed_stale!
+    expect(sentinelCompletions[1].type).toBe("agent.completed_stale");
+    expect(sentinelCompletions[1].data?.staleLoopEpoch).toBe(1);
+    expect(sentinelCompletions[1].message).toContain("[STALE epoch 1 superseded by epoch 2]");
+
+    // Timing windows must also reflect epoch-1 finishing AFTER epoch-2
+    const win1 = state.sentinelWindows.find((w) => w.epoch === 1)!;
+    const win2 = state.sentinelWindows.find((w) => w.epoch === 2)!;
+    expect(win1.endedAtMs!).toBeGreaterThan(win2.endedAtMs!);
+  });
+
+  it("Blocker 5: post-run /inject response returns refreshed sourceRecords containing the newly cited dispute ID", async () => {
+    const server = createRefundGuardServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const runRes = await fetch(`${baseUrl}/api/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenarioId: "case-1-clean-allocation", modeOverride: "mock" }),
+      });
+      const sse = await runRes.text();
+      let sessionId = "";
+      for (const chunk of sse.split("\n\n")) {
+        if (chunk.includes("event: report")) {
+          const line = chunk.split("\n").find((l) => l.startsWith("data:"));
+          if (line) sessionId = JSON.parse(line.slice(5).trim()).sessionId;
+        }
+      }
+
+      const injRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/inject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "CHARGEBACK_MATCHING" }),
+      });
+      expect(injRes.status).toBe(200);
+      const injJson = (await injRes.json()) as {
+        disputeId: string;
+        report: { ledger: { allCitations: string[] } };
+        sourceRecords: { dispute: { disputeId: string } | null };
+      };
+      expect(injJson.report.ledger.allCitations).toContain(injJson.disputeId);
+      expect(injJson.sourceRecords.dispute?.disputeId).toBe(injJson.disputeId);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });

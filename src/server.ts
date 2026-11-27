@@ -188,6 +188,24 @@ export function createRefundGuardServer(): Server {
         return;
       }
 
+      const buildSourceRecords = (session: StoredSession) => {
+        const allNotes = [session.scenario.initialWarehouseNote];
+        if (session.scenario.midFlightInjection?.warehouseNote) {
+          allNotes.push(session.scenario.midFlightInjection.warehouseNote);
+        }
+        allNotes.push(...session.injectedNotes);
+        return {
+          settlements: session.scenario.settlements,
+          orderLines: session.scenario.orderLines,
+          warehouseNotes: allNotes,
+          dispute:
+            session.injectedDispute ??
+            session.scenario.midFlightInjection?.chargeback ??
+            session.scenario.initialChargeback ??
+            null,
+        };
+      };
+
       // Live mid-run OR post-run event injection into a session
       const injectMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);
       if (req.method === "POST" && injectMatch) {
@@ -219,6 +237,7 @@ export function createRefundGuardServer(): Server {
             currentVerdict: snap.verdict,
             approvable: snap.approvable,
             report: snap.report,
+            sourceRecords: buildSourceRecords(session),
           });
           return;
         }
@@ -240,6 +259,7 @@ export function createRefundGuardServer(): Server {
             currentVerdict: snap.verdict,
             approvable: snap.approvable,
             report: snap.report,
+            sourceRecords: buildSourceRecords(session),
           });
           return;
         }
@@ -257,6 +277,7 @@ export function createRefundGuardServer(): Server {
             currentVerdict: snap.verdict,
             approvable: snap.approvable,
             report: snap.report,
+            sourceRecords: buildSourceRecords(session),
           });
           return;
         }

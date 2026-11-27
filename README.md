@@ -8,7 +8,7 @@
 | **Runtime** | `@mozaik-ai/core@6.0.0` (TypeScript, Node.js 20+, MIT License) |
 | **Concurrency Model** | 2 concurrent `Agent` loops per checkout (`RefundDeskAgent` evidence-light proposer + `DisputeFulfillmentSentinel` evidence auditor) + shared `RuntimeState` + awaited `InterceptionHandler` + `AuditObserver` |
 | **Approval Safety** | Server-side `POST /api/sessions/:id/approve` enforces current-epoch & verdict eligibility in memory (returns **HTTP 409 Conflict** on stale epochs or held/frozen verdicts); Batch Desk triage is clearly labeled as local preview state |
-| **Automated Verification** | **27 / 27** Vitest tests passing (core cases, line-level reconciliation & duplicate settlement dedup, dispute identity/closure/replay safety, affirmative physical receipt & non-return parser checks, direct gate fuzzing, HTTP 409 approval gate) |
+| **Automated Verification** | **32 / 32** Vitest tests passing (core cases, line-level reconciliation & duplicate settlement dedup, dispute identity/closure/out-of-order replay safety, affirmative physical receipt checks, loopId stale tracking, direct gate fuzzing, refreshed sourceCards & HTTP 409 approval gate) |
 | **Zero-Key Reproducibility** | Full test suite, benchmark, and interactive UI run out of the box via a deterministic **rule-based parser (limited to tested phrasings)** (`npm ci && npm test`); live OpenAI / Anthropic / Gemini enabled via `.env` |
 | **Data Safety** | 100% synthetic orders, settlements, warehouse notes, and disputes; no real customer data, accounts, or money movement |
 
@@ -86,7 +86,7 @@ npm ci
 
 ```bash
 npm run typecheck                             # Strict TypeScript check (0 errors)
-npm test                                      # 27 automated Vitest tests
+npm test                                      # 32 automated Vitest tests
 npm run compare                               # 3-way benchmark (scored on verdict, seller & exact payouts)
 npm start                                     # Interactive UI (desktop & mobile) on http://localhost:3000
 npm run cli                                   # Run all 5 scenarios in terminal
@@ -160,7 +160,7 @@ Switch to **Black Friday Batch Desk (4 Checkouts)** in the UI (or call `GET /api
 
 ---
 
-## 7. Automated Test Matrix (`npm test`: 27 / 27 Passing)
+## 7. Automated Test Matrix (`npm test`: 32 / 32 Passing)
 
 | Group | Tests | What They Verify |
 | :--- | :---: | :--- |
@@ -171,6 +171,7 @@ Switch to **Black Friday Batch Desk (4 Checkouts)** in the UI (or call `GET /api
 | Direct Gate Strictness & Idempotency (`Audit Fix 4A-4B`) | 2 | Blocks duplicate same-epoch proposals (`DUPLICATE_PROPOSAL_BLOCKED`); rejects wrong `checkoutId`, `LOW` confidence, cross-seller line ID, stale note ID, invalid seller `SELLER-Z`, wrong amount, future epoch `99`, and Sentinel timeout without infinite spin. |
 | Physical Receipt, Non-Return Parser & Gate Citations (`Audit Fix 5`, `Round 2 Fix 4`) | 2 | Verifies negation, tentative/pending notes, `"Both items received"`, `"Nothing missing"`, `"customer kept"`, exterior barcode-only / contents never checked, `"wasn't in the box"`, `"could not locate"`, `"still in transit"`, `"hub has not seen it"`, `"expected tomorrow"`, wrong-brand/wrong-item notes, plus gate rejection of blank `checkoutId` and fabricated `INVENTED-1` citations. |
 | Baseline, Batch Desk, Live Interrupt & HTTP 409 Gate | 4 | Snapshot vs. live comparison, 4-checkout batch (all start `PENDING`, held/frozen non-approvable), `onSessionReady` live interrupt, and real HTTP server tests asserting `409 Conflict` on stale post-run epoch and held verdicts plus `200 OK` on current eligible approvals. |
+| Final Pre-Submission Blocker Regressions (`Blocker 1-5`) | 5 | Sealed carton + future return promise fail closed; post-run QC correction + dispute does not reuse obsolete `WH-505` finding; out-of-order `CLOSED_WON` (`15:30`) blocks older `OPEN` (`14:30`) and `CHK-402` clears `402`; `loopId`-bound observer tags out-of-order Sentinel completions accurately; `/inject` returns refreshed `sourceRecords` with the newly cited dispute. |
 
 ---
 
@@ -179,8 +180,8 @@ Switch to **Black Friday Batch Desk (4 Checkouts)** in the UI (or call `GET /api
 Every shilling in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed in integer KSh from deduplicated immutable source records (`DRF-*`, `TKT-*`, `STL-*`, `LINE-*`, `WH-*`, `DSP-*`). RefundGuard reports `requestedRefundKsh`, `pendingRefundKsh`, `blockedUnsafeRefundKsh`, `totalWithheldFromGrossKsh`, and `heldReserveKsh` separately:
 
 - **Approved verdicts (`READY_FOR_HUMAN_APPROVAL`, `CORRECTED_READY_FOR_APPROVAL`):** Release full reconciled net settlement (`reconciliationMatched === true`); deduct refund only from the verified seller (explicitly labeling `pendingRefundKsh` when no processor refund has posted yet).
-- **Dispute collision (`FROZEN_DISPUTE_COLLISION`) with HIGH-confidence verified returned seller and single-line dispute amount:** Block the unsafe refund proposal (`requestedRefundKsh`) and hold the exact disputed amount (plus any already-posted refund against that seller), keeping the undisputed seller clear.
-- **Checkout-wide dispute (`dispute.amountKsh > sellerLineAmount`) or unresolved attribution/mismatch (`HOLD_MISSING_EVIDENCE`, `HOLD_RECONCILIATION_MISMATCH`, `VERIFY_DISPUTE_MATCH`, `PENDING_REVALIDATION`, or `FROZEN_DISPUTE_COLLISION` without a verified returned seller):** Withhold both checkout lines from gross seller payouts (`totalWithheldFromGrossKsh`) rather than guessing from the untrusted draft. `heldReserveKsh` reports the exact cash reserve held out of `netBatchTotalKsh`.
+- **Dispute collision (`FROZEN_DISPUTE_COLLISION`) with HIGH-confidence verified returned seller on the current latest warehouse note and single-line dispute amount:** Block the unsafe refund proposal (`requestedRefundKsh`) and hold the exact disputed amount (plus any already-posted refund against that seller), keeping the undisputed seller clear.
+- **Checkout-wide dispute (`dispute.amountKsh > sellerLineAmount`), obsolete warehouse finding, or unresolved attribution/mismatch (`HOLD_MISSING_EVIDENCE`, `HOLD_RECONCILIATION_MISMATCH`, `VERIFY_DISPUTE_MATCH`, `PENDING_REVALIDATION`, or `FROZEN_DISPUTE_COLLISION` without a current verified seller):** Withhold both checkout lines from gross seller payouts (`totalWithheldFromGrossKsh`) rather than guessing from the untrusted draft. `heldReserveKsh` reports the exact cash reserve held out of `netBatchTotalKsh`.
 
 ---
 
@@ -192,7 +193,7 @@ Every shilling in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed i
 | `/api/health` | `GET` | Runtime status, active mode (`mock` or `live`), model name, loaded counts, and retained session count. |
 | `/api/scenarios` | `GET` | All 5 single-checkout scenarios and 4 Black Friday batch checkouts. |
 | `/api/run` | `POST` | Runs a checkout concurrently on Mozaik, streaming `session`, `timeline`, and `report` via SSE, and retains the session in memory for post-run webhooks and approval checks. |
-| `/api/sessions/:id/inject` | `POST` | Injects a mid-run or post-run warehouse correction or dispute webhook into a session, bumping `epoch`, invalidating stale approvals, and returning the refreshed `report` snapshot so the UI stays consistent. |
+| `/api/sessions/:id/inject` | `POST` | Injects a mid-run or post-run warehouse correction or dispute webhook into a session, bumping `epoch`, invalidating stale approvals, and returning the refreshed `report` and `sourceRecords` so the UI and evidence cards stay consistent. |
 | `/api/sessions/:id/approve` | `POST` | In-memory server-side approval gate enforcing current-epoch match and verdict eligibility; returns **HTTP 409 Conflict** (`APPROVAL_EXPIRED_STALE_EPOCH` or `VERDICT_NOT_APPROVABLE`) or **HTTP 200 OK**. |
 | `/api/batch` | `GET` | Runs 4 concurrent checkout reviews (2 overlapping Mozaik loops inside each checkout); all rows start `PENDING` for local triage preview. |
 | `/api/compare` | `GET` | Executes the 5-case three-way benchmark (`Ticket+Draft` vs. `t=0 Snapshot` vs. `RefundGuard`). |
@@ -210,13 +211,13 @@ src/
     fixtures.ts        # 5 core scenarios (physical inspection notes & Visa 13.3 codes) + dispute fixtures
     batch.ts           # 4-checkout, 8-seller Black Friday batch fixtures
   mozaik/
-    runtime.ts         # RefundGuardState (RuntimeState), replay-safe supersession & terminal disputes
+    runtime.ts         # RefundGuardState (RuntimeState), replay-safe supersession, loopId & terminal disputes
     interception.ts    # Awaited InterceptionHandler on `propose_refund` (idempotent & strict)
     runner.ts          # Dual live LLM / rule-based deterministic MockInferenceRunner config
     agents/
       refund-desk.ts   # Agent 1 (evidence-light proposer): ticket + policy + draft -> propose_refund
       sentinel.ts      # Agent 2 (concurrent auditor): physical notes + disputes -> publish_sentinel_finding
-      observer.ts      # AuditObserver measuring concurrent overlap & tagging stale loop completions
+      observer.ts      # AuditObserver binding exact Mozaik loopId & tagging stale loop completions
   engine/
     run-case.ts        # Concurrent Mozaik runner + live snapshot handle + readiness invariant
     run-batch.ts       # Concurrent 4-checkout batch runner (all rows start PENDING)
@@ -230,6 +231,6 @@ public/
 traces/
   live-run-trace.json  # Live OpenAI gpt-4o-mini post-acceptance expiry trace
 tests/
-  refund-guard.test.ts # 27 Vitest tests (`npm test`)
+  refund-guard.test.ts # 32 Vitest tests (`npm test`)
 LICENSE                # MIT License
 ```

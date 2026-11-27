@@ -386,8 +386,8 @@ function analyzeSentinelEvidence(prompt: string): {
     };
   }
 
-  // 3. Return verified seller line match
-  if (matchedLine) {
+  // 3. Return verified seller line match ONLY when affirmative physical receipt/inspection is present
+  if (matchedLine && hasAffirmativePhysicalReceipt(noteText)) {
     return {
       epoch,
       checkoutId,
@@ -411,7 +411,7 @@ function analyzeSentinelEvidence(prompt: string): {
     disputeId: "NONE",
     evidenceNoteId: noteId,
     confidence: "LOW",
-    summary: `Warehouse note ${noteId} is ambiguous between sellers; holding for human inspection.`,
+    summary: `Warehouse note ${noteId} lacks affirmative physical receipt proof or is ambiguous between sellers; holding for human inspection.`,
     citedSourceIds: [noteId],
   };
 }
@@ -422,7 +422,7 @@ function isWarehouseNoteMissingOrTentative(noteText: string): boolean {
     .replace(/\b(nothing|none|no\s+items?)\s+missing\b/g, "complete");
 
   if (
-    /\b(no parcel|label created only|label only|barcode only|carton barcode only|manifest only|contents never checked|never checked|not checked|unverified|empty box|ambiguous|unknown item|pending delivery|pending bench|pending inspection|pending qc|tentative|preliminary|unopened|not yet opened|not yet inspected|both items|both products|all items|still in transit|in transit|expected tomorrow|expected to arrive|could not locate|cannot locate|hub has not seen|has not seen|not the ordered item|wrong brand|wrong item|customer claims)\b/i.test(
+    /\b(no parcel|label created only|label only|barcode only|carton barcode only|manifest only|contents never checked|never checked|not checked|unverified|empty box|ambiguous|unknown item|pending delivery|pending bench|pending inspection|pending qc|tentative|preliminary|unopened|not yet opened|not yet inspected|remains sealed|still sealed|sealed carton|sealed box|external sticker|exterior sticker|sticker reads|will send back|will return|plans to return|promised to return|to be returned|next week|both items|both products|all items|still in transit|in transit|expected tomorrow|expected to arrive|could not locate|cannot locate|hub has not seen|has not seen|not the ordered item|wrong brand|wrong item|customer claims)\b/i.test(
       normalized,
     )
   ) {
@@ -434,6 +434,24 @@ function isWarehouseNoteMissingOrTentative(noteText: string): boolean {
   }
 
   return false;
+}
+
+function hasAffirmativePhysicalReceipt(noteText: string): boolean {
+  const positiveClauses = noteText
+    .toLowerCase()
+    .split(/[.;!\n]+/)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0)
+    .filter(
+      (c) =>
+        !/\b(did not receive|didn't receive|never received|not received|wasn't in the box|was not in the box|not in the box|was not|were not|not returned|not in parcel|no boots|no jacket|kept by|customer kept|buyer kept|kept the|reused the .* box|will send|will return|plans to|expected to)\b/i.test(
+          c,
+        ),
+    );
+  const positiveText = positiveClauses.join(" | ");
+  return /\b(received|checked in|confirmed|verified|opened|bench|logged|inside is|came back|intake|physically)\b/i.test(
+    positiveText,
+  );
 }
 
 function inferWarehouseOrderLine(

@@ -234,6 +234,7 @@ export function computeGroundedLedger(
   sentinelFinding: SentinelFinding | null,
   disputeEvaluation: DisputeMatchEvaluation | null = null,
   activeDisputeAmountKsh: number | null = null,
+  latestWarehouseNoteId: string = scenario.initialWarehouseNote.noteId,
 ): GroundedLedgerResult {
   const { unique: uniqueSettlements } = deduplicateSettlements(scenario.settlements);
   const captureSettlements = uniqueSettlements.filter((s) => s.kind === "CAPTURE");
@@ -264,13 +265,16 @@ export function computeGroundedLedger(
   const isApproved = isVerdictApprovable(verdict);
 
   // Only attribute a single-seller dispute reserve when:
-  // 1) Sentinel verified the specific returned seller & line with HIGH confidence, AND
-  // 2) The disputed amount does NOT exceed that seller's checkout line (if it exceeds a
-  //    single seller's line, e.g. a checkout-wide KSh 20,000 dispute, hold both sellers).
+  // 1) Sentinel verified the specific returned seller & line with HIGH confidence,
+  // 2) The finding was computed from the CURRENT latest warehouse note (never obsolete), AND
+  // 3) The disputed amount does NOT exceed that seller's checkout line.
+  const findingMatchesLatestNote =
+    sentinelFinding !== null && sentinelFinding.evidenceNoteId === latestWarehouseNoteId;
   let verifiedDisputedSellerId: SellerId | null = null;
   let verifiedDisputedSellerLineKsh = 0;
   if (
     verdict === "FROZEN_DISPUTE_COLLISION" &&
+    findingMatchesLatestNote &&
     sentinelFinding !== null &&
     sentinelFinding.confidence === "HIGH" &&
     sentinelFinding.verifiedSellerId !== null

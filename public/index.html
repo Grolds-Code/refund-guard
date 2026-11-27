@@ -1666,6 +1666,7 @@
         const refreshedPayload = {
           ...state.lastBundle,
           report: data.report,
+          sourceRecords: data.sourceRecords || state.lastBundle.sourceRecords,
         };
         if (priorEpoch !== null && data.epoch > priorEpoch) {
           state.staleApprovalEpoch = priorEpoch;

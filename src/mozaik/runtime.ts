@@ -1,5 +1,9 @@
 import { defineRuntime, RuntimeState, type SemanticEvent } from "@mozaik-ai/core";
-import { evaluateDisputeLink } from "../finance/dispute-match.js";
+import {
+  evaluateDisputeLink,
+  isVerifiedPaymentIdentityMatch,
+  normalizeCheckoutRef,
+} from "../finance/dispute-match.js";
 import {
   isVerdictApprovable,
   type ChargebackWebhookRecord,
@@ -20,6 +24,7 @@ export interface AgentRunWindow {
   startedAtMs: number;
   endedAtMs?: number;
   epoch: number;
+  loopId?: string;
 }
 
 const TERMINAL_DISPUTE_STATUSES = new Set<DisputeStatus>([
@@ -34,6 +39,7 @@ function parseTimestampMs(iso: string): number | null {
 }
 
 function sameDisputePaymentIdentity(
+  checkoutId: string,
   existing: ChargebackWebhookRecord,
   incoming: ChargebackWebhookRecord,
 ): boolean {
@@ -42,8 +48,8 @@ function sameDisputePaymentIdentity(
   return (
     existing.cardLast4.trim() === incoming.cardLast4.trim() &&
     existingSettlement === incomingSettlement &&
-    existing.pspReferenceSuffix.trim().toLowerCase() ===
-      incoming.pspReferenceSuffix.trim().toLowerCase() &&
+    normalizeCheckoutRef(checkoutId, existing.pspReferenceSuffix) ===
+      normalizeCheckoutRef(checkoutId, incoming.pspReferenceSuffix) &&
     existing.amountKsh === incoming.amountKsh
   );
 }
@@ -272,8 +278,9 @@ export class RefundGuardState extends RuntimeState {
     if (existingIdx >= 0) {
       const existing = this.chargebacks[existingIdx];
 
-      // 1. Closure or status update MUST match the original dispute's payment identity.
-      if (!sameDisputePaymentIdentity(existing, chargeback)) {
+      // 1. Closure or status update MUST match the original dispute's payment identity
+      //    (normalizing equivalent checkout refs such as "402" and "CHK-402").
+      if (!sameDisputePaymentIdentity(this.scenario.checkoutId, existing, chargeback)) {
         this.recordEvent(
           "evidence.chargeback_rejected",
           "PSPWebhook",
@@ -383,7 +390,32 @@ export class RefundGuardState extends RuntimeState {
 
     // New disputeId not previously seen
     this.lastDisputeEvaluation = evaluation;
-    if (evaluation.matchState === "INACTIVE" || evaluation.matchState === "UNRELATED") {
+    if (evaluation.matchState === "INACTIVE") {
+      // If a verified CLOSED_WON / WITHDRAWN arrives BEFORE an older OPEN for the same
+      // disputeId, retain the terminal closure record (without bumping epoch or freezing)
+      // so the delayed older OPEN replay will be rejected.
+      if (isVerifiedPaymentIdentityMatch(this.scenario, chargeback)) {
+        this.chargebacks.push(chargeback);
+      }
+      this.recordEvent(
+        "evidence.chargeback_ignored",
+        "PSPWebhook",
+        `Recorded inactive dispute ${chargeback.disputeId} (${evaluation.matchState}): ${evaluation.reason}`,
+        {
+          disputeId: chargeback.disputeId,
+          matchState: evaluation.matchState,
+          mismatchedSignals: evaluation.mismatchedSignals,
+        },
+      );
+      return {
+        relevant: false,
+        epoch: this.epoch,
+        evaluation,
+        invalidatedPriorApproval: false,
+      };
+    }
+
+    if (evaluation.matchState === "UNRELATED") {
       this.recordEvent(
         "evidence.chargeback_ignored",
         "PSPWebhook",
@@ -513,6 +545,45 @@ export class RefundGuardState extends RuntimeState {
   notifySentinelLoopSettled(): void {
     this.sentinelPendingCount = Math.max(0, this.sentinelPendingCount - 1);
     this.checkCompletion();
+  }
+
+  bindLoopWindow(
+    agent: "refund" | "sentinel",
+    loopId: string,
+    epoch: number,
+    isReplan = false,
+  ): void {
+    const windows = agent === "refund" ? this.refundDeskWindows : this.sentinelWindows;
+    const existing = windows.find((w) => w.loopId === loopId);
+    if (existing) {
+      if (isReplan && epoch > existing.epoch) {
+        existing.epoch = epoch;
+      }
+      return;
+    }
+    // Prefer an unbound window with matching epoch; otherwise bind the latest unbound window.
+    for (let i = windows.length - 1; i >= 0; i -= 1) {
+      if (!windows[i].loopId && windows[i].epoch === epoch) {
+        windows[i].loopId = loopId;
+        return;
+      }
+    }
+    for (let i = windows.length - 1; i >= 0; i -= 1) {
+      if (!windows[i].loopId) {
+        windows[i].loopId = loopId;
+        windows[i].epoch = epoch;
+        return;
+      }
+    }
+  }
+
+  resolveLoopWindow(agent: "refund" | "sentinel", loopId?: string): AgentRunWindow | undefined {
+    const windows = agent === "refund" ? this.refundDeskWindows : this.sentinelWindows;
+    if (loopId) {
+      const exact = windows.find((w) => w.loopId === loopId);
+      if (exact) return exact;
+    }
+    return windows.find((w) => !w.endedAtMs);
   }
 
   private isIdle(): boolean {

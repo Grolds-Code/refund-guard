@@ -20,6 +20,53 @@ import type {
  *    or a short suffix (< 3 chars / not matching the checkout's full trailing token),
  *    never produces a verified match.
  */
+export function normalizeCheckoutRef(checkoutId: string, rawRef: string): string {
+  const normalizedRef = rawRef.trim().toLowerCase();
+  const normalizedCheckout = checkoutId.trim().toLowerCase();
+  const trailingToken = normalizedCheckout.split("-").pop() ?? normalizedCheckout;
+  if (
+    normalizedRef.length >= 3 &&
+    (normalizedRef === normalizedCheckout || normalizedRef === trailingToken)
+  ) {
+    return normalizedCheckout;
+  }
+  return normalizedRef;
+}
+
+/**
+ * Checks whether a dispute webhook (regardless of OPEN / CLOSED_WON / CLOSED_LOST status)
+ * has verified payment identity matching this checkout's original capture settlement.
+ */
+export function isVerifiedPaymentIdentityMatch(
+  scenario: ScenarioFixture,
+  dispute: ChargebackWebhookRecord,
+): boolean {
+  const capture = scenario.settlements.find((s) => s.kind === "CAPTURE");
+  if (!capture) return false;
+
+  const cardMatches =
+    dispute.cardLast4.trim().length === 4 &&
+    dispute.cardLast4.trim() === capture.cardLast4.trim();
+  const providedSettlementId = dispute.paymentSettlementId?.trim() ?? "";
+  const settlementIdMatches =
+    providedSettlementId.length > 0 && providedSettlementId === capture.settlementId;
+
+  const normalizedSuffix = dispute.pspReferenceSuffix.trim().toLowerCase();
+  const hasSuffix = normalizedSuffix.length > 0;
+  const suffixMatches =
+    hasSuffix &&
+    normalizeCheckoutRef(scenario.checkoutId, normalizedSuffix) ===
+      scenario.checkoutId.trim().toLowerCase();
+  const suffixConflicted = hasSuffix && !suffixMatches;
+
+  const amountWithinCapture =
+    Number.isInteger(dispute.amountKsh) &&
+    dispute.amountKsh > 0 &&
+    dispute.amountKsh <= capture.amountKsh;
+
+  return cardMatches && settlementIdMatches && !suffixConflicted && amountWithinCapture;
+}
+
 export function evaluateDisputeLink(
   scenario: ScenarioFixture,
   dispute: ChargebackWebhookRecord,
@@ -82,9 +129,9 @@ export function evaluateDisputeLink(
   const normalizedSuffix = dispute.pspReferenceSuffix.trim().toLowerCase();
   const hasSuffix = normalizedSuffix.length > 0;
   const suffixMatches =
-    normalizedSuffix.length >= 3 &&
-    (normalizedSuffix === scenario.checkoutId.toLowerCase() ||
-      normalizedSuffix === checkoutTrailingToken);
+    hasSuffix &&
+    normalizeCheckoutRef(scenario.checkoutId, normalizedSuffix) ===
+      scenario.checkoutId.trim().toLowerCase();
   const suffixConflicted = hasSuffix && !suffixMatches;
 
   if (suffixMatches) {
