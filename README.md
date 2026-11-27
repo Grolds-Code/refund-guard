@@ -203,17 +203,7 @@ Every number in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed in 
 
 ---
 
-## 10. 90-Second Demo Script
-
-1. Run `npm start` (or `node --import tsx src/server.ts`) and open `http://localhost:3000`.
-2. **0:00-0:30 (Zero-Sum Batch + Mid-Flight Expiration):** Open on Case 4 (`CHK-402`, batch total **KSh 90,000**, draft **A: 60k / B: 30k**). Point to the **Concurrent Execution Timeline** showing both agents overlapping, the mid-flight QC correction bumping `epoch 1 -> 2`, `SUPERSEDED_EVIDENCE` expiring Seller B, and payouts updating to **A: KSh 50,000 / B: KSh 40,000** (same KSh 90,000 total).
-3. **0:30-0:50 (Source Grounding):** Scroll directly to the **Source Evidence Records** cards (`WH-404-V1`, `WH-404-V2`, `STL-PAY-402`, `STL-REF-402`) proving every shilling maps to source records.
-4. **0:50-1:10 (Negative Control & Batch Desk):** Switch to Case 1 with **Unrelated dispute (card 8812 / ref 999)** to show it is ignored (`READY_FOR_HUMAN_APPROVAL`), then toggle **Black Friday Batch Desk (4 Checkouts)** to show 8 concurrent loops isolating exceptions with live **Approve / Hold / Reject** buttons.
-5. **1:10-1:30 (Judge Reproduction):** Show `npm test` (14/14 passing), `npm run compare` (`1/5` vs. `3/5` vs. `5/5`), and `traces/live-run-trace.json` (`gpt-4o-mini`, `5,454ms` overlap).
-
----
-
-## 11. Project Structure
+## 10. Project Structure
 
 ```text
 src/
