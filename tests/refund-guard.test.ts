@@ -699,4 +699,253 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  // --- Round 2 Audit Regression Suite ---
+
+  it("Round 2 Fix 1: mismatched CLOSED_WON cannot clear OPEN dispute, CLOSED_LOST is terminal, and delayed OPEN replay after CLOSED_WON cannot re-freeze", async () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
+    const openDispute = buildInjectedChargeback(scenario);
+    const mismatchedClose: ChargebackWebhookRecord = {
+      disputeId: openDispute.disputeId,
+      status: "CLOSED_WON",
+      receivedAt: new Date(Date.now() + 5_000).toISOString(),
+      pspReferenceSuffix: "999",
+      paymentSettlementId: "STL-PAY-999",
+      cardLast4: "0000",
+      amountKsh: 1,
+      reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
+      narrative: "Mismatched closure payload.",
+    };
+
+    const report = await runRefundGuardCase(scenario, {
+      modeOverride: "mock",
+      latencyScale: 0.35,
+      onProposalAccepted: ({ injectChargeback }) => {
+        injectChargeback(openDispute);
+        const rej = injectChargeback(mismatchedClose);
+        expect(rej.relevant).toBe(false);
+      },
+    });
+    expect(report.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(report.acceptedProposal).toBeNull();
+
+    // Terminal CLOSED_LOST cannot be overwritten by older CLOSED_WON;
+    // OPEN -> CLOSED_WON -> delayed OPEN replay stays cleared.
+    const state1 = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+    const lost: ChargebackWebhookRecord = {
+      ...openDispute,
+      disputeId: "DSP-TERM-1",
+      status: "CLOSED_LOST",
+      receivedAt: "2026-11-26T16:00:00+03:00",
+    };
+    const olderWon: ChargebackWebhookRecord = {
+      ...lost,
+      status: "CLOSED_WON",
+      receivedAt: "2026-11-26T15:00:00+03:00",
+    };
+    state1.addChargebackWebhook(lost);
+    expect(state1.addChargebackWebhook(olderWon).relevant).toBe(false);
+    expect(state1.getLatestRelevantChargeback()?.evaluation.matchState).toBe("VERIFIED_LOST_DISPUTE");
+
+    const state2 = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+    const origOpen: ChargebackWebhookRecord = {
+      ...openDispute,
+      disputeId: "DSP-REPLAY-1",
+      status: "OPEN",
+      receivedAt: "2026-11-26T14:30:00+03:00",
+    };
+    const validWon: ChargebackWebhookRecord = {
+      ...origOpen,
+      status: "CLOSED_WON",
+      receivedAt: "2026-11-26T15:30:00+03:00",
+    };
+    state2.addChargebackWebhook(origOpen);
+    expect(state2.addChargebackWebhook(validWon).relevant).toBe(true);
+    const epochAfterClose = state2.epoch;
+    expect(state2.addChargebackWebhook(origOpen).relevant).toBe(false);
+    expect(state2.epoch).toBe(epochAfterClose);
+    expect(state2.getLatestRelevantChargeback()).toBeNull();
+  });
+
+  it("Round 2 Fix 2: warehouse replay safety ignores redelivered superseded note WH-404-V1 after WH-404-V2", () => {
+    const scenario = getScenarioById("case-4-late-correction-midflight");
+    const state = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+    const v2 = scenario.midFlightInjection!.warehouseNote!;
+    const v1 = scenario.initialWarehouseNote;
+
+    const r1 = state.addWarehouseCorrection(v2);
+    expect(r1.applied).toBe(true);
+    expect(state.epoch).toBe(2);
+    expect(state.getLatestWarehouseNote().noteId).toBe("WH-404-V2");
+
+    // Redelivering WH-404-V1 must NOT restore V1 or advance epoch to 3
+    const r2 = state.addWarehouseCorrection(v1);
+    expect(r2.applied).toBe(false);
+    expect(state.epoch).toBe(2);
+    expect(state.getLatestWarehouseNote().noteId).toBe("WH-404-V2");
+  });
+
+  it("Round 2 Fix 3: line-level refundable cap, duplicate settlement dedup, unposted draft deductions, ticket mismatch, pending refund, and partial/checkout-wide dispute reserves", async () => {
+    const case1 = getScenarioById("case-1-clean-allocation");
+
+    // A) Posted + ticket + draft refund KSh 15,000 exceeds KSh 10,000 verified line
+    const overLineCap: ScenarioFixture = {
+      ...case1,
+      settlements: case1.settlements.map((s) =>
+        s.kind === "REFUND" ? { ...s, amountKsh: 15_000 } : s,
+      ),
+      ticket: { ...case1.ticket, requestedRefundKsh: 15_000 },
+      draft: {
+        ...case1.draft,
+        refundAmountKsh: 15_000,
+        totalBatchSettlementKsh: 85_000,
+        sellerLines: [
+          { sellerId: "SELLER-A", grossSalesKsh: 60_000, refundDeductionKsh: 15_000, netPayoutKsh: 45_000 },
+          { sellerId: "SELLER-B", grossSalesKsh: 40_000, refundDeductionKsh: 0, netPayoutKsh: 40_000 },
+        ],
+      },
+    };
+    const rOver = await runRefundGuardCase(overLineCap, { modeOverride: "mock", latencyScale: 0.25 });
+    expect(rOver.verdict).toBe("HOLD_RECONCILIATION_MISMATCH");
+
+    // B) Duplicate STL-REF-402 record fails closed
+    const dupSettlement: ScenarioFixture = {
+      ...case1,
+      settlements: [...case1.settlements, case1.settlements[1]],
+    };
+    const rDup = await runRefundGuardCase(dupSettlement, { modeOverride: "mock", latencyScale: 0.25 });
+    expect(rDup.verdict).toBe("HOLD_RECONCILIATION_MISMATCH");
+
+    // C) No posted refund + invalid draft deductions (A:55k, B:40k) fails closed
+    const case5 = getScenarioById("case-5-chargeback-collision");
+    const bogusUnposted: ScenarioFixture = {
+      ...case5,
+      midFlightInjection: undefined,
+      draft: {
+        ...case5.draft,
+        sellerLines: [
+          { sellerId: "SELLER-A", grossSalesKsh: 60_000, refundDeductionKsh: 55_000, netPayoutKsh: 5_000 },
+          { sellerId: "SELLER-B", grossSalesKsh: 40_000, refundDeductionKsh: 40_000, netPayoutKsh: 0 },
+        ],
+      },
+    };
+    const rBogus = await runRefundGuardCase(bogusUnposted, { modeOverride: "mock", latencyScale: 0.25 });
+    expect(rBogus.verdict).toBe("HOLD_RECONCILIATION_MISMATCH");
+
+    // D) Ticket asks 15,000 while posted & draft refund are 10,000 fails closed
+    const ticketDiff: ScenarioFixture = {
+      ...case1,
+      ticket: { ...case1.ticket, requestedRefundKsh: 15_000 },
+    };
+    const rTicket = await runRefundGuardCase(ticketDiff, { modeOverride: "mock", latencyScale: 0.25 });
+    expect(rTicket.verdict).toBe("HOLD_RECONCILIATION_MISMATCH");
+
+    // E) Case 5 with dispute disabled explicitly accounts for pendingRefundKsh = 10,000
+    const rPending = await runRefundGuardCase(case5, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      overrideInjection: null,
+    });
+    expect(rPending.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
+    expect(rPending.ledger.pendingRefundKsh).toBe(10_000);
+    expect(rPending.ledger.supportedTotalKsh).toBe(90_000);
+    expect(rPending.ledger.holdPolicyExplanation).toContain("pending refund");
+
+    // F) Case 5 with KSh 5,000 partial dispute holds KSh 5,000; KSh 20,000 checkout-wide dispute holds KSh 20,000
+    const baseDispute = case5.midFlightInjection!.chargeback!;
+    const rPartialDispute = await runRefundGuardCase(case5, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      overrideInjection: {
+        delayMs: 50,
+        kind: "CHARGEBACK_WEBHOOK",
+        chargeback: { ...baseDispute, amountKsh: 5_000 },
+      },
+    });
+    expect(rPartialDispute.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(rPartialDispute.ledger.heldReserveKsh).toBe(5_000);
+
+    const rWideDispute = await runRefundGuardCase(case5, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      overrideInjection: {
+        delayMs: 50,
+        kind: "CHARGEBACK_WEBHOOK",
+        chargeback: { ...baseDispute, amountKsh: 20_000 },
+      },
+    });
+    expect(rWideDispute.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(rWideDispute.ledger.heldReserveKsh).toBe(20_000);
+  });
+
+  it("Round 2 Fix 4: exterior barcode-only and non-return phrasings fail closed, and blank checkoutId / invented citations are rejected by gate", async () => {
+    const case1 = getScenarioById("case-1-clean-allocation");
+    const nonReturnNotes = [
+      "Exterior carton barcode only: JKT-NVY-L (Seller A). Contents never checked.",
+      "The jacket wasn't in the box.",
+      "We could not locate the Navy Quilted Winter Jacket.",
+      "Jacket JKT-NVY-L is still in transit.",
+      "Customer claims the jacket was returned; hub has not seen it.",
+      "Jacket JKT-NVY-L expected tomorrow.",
+      "Parcel contained a jacket, but it is not the ordered item (wrong brand, red, size S).",
+    ];
+
+    for (const note of nonReturnNotes) {
+      const r = await runRefundGuardCase(case1, {
+        modeOverride: "mock",
+        latencyScale: 0.2,
+        customWarehouseNoteText: note,
+      });
+      expect(r.verdict, `Expected HOLD_MISSING_EVIDENCE for: ${note}`).toBe(
+        "HOLD_MISSING_EVIDENCE",
+      );
+    }
+
+    // Blank checkoutId and invented citedSourceIds must fail gate validation
+    const badGateFindings: SentinelFinding[] = [
+      {
+        epoch: 1,
+        checkoutId: "",
+        status: "VERIFIED_RETURN",
+        verifiedSellerId: "SELLER-A",
+        verifiedLineId: "LINE-402-A",
+        disputeId: null,
+        evidenceNoteId: "WH-101",
+        confidence: "HIGH",
+        summary: "blank checkout",
+        citedSourceIds: ["WH-101", "LINE-402-A"],
+        recordedAtMs: 5,
+      },
+      {
+        epoch: 1,
+        checkoutId: case1.checkoutId,
+        status: "VERIFIED_RETURN",
+        verifiedSellerId: "SELLER-A",
+        verifiedLineId: "LINE-402-A",
+        disputeId: null,
+        evidenceNoteId: "WH-101",
+        confidence: "HIGH",
+        summary: "invented citation",
+        citedSourceIds: ["WH-101", "LINE-402-A", "INVENTED-1"],
+        recordedAtMs: 5,
+      },
+    ];
+
+    for (const bad of badGateFindings) {
+      const state = new RefundGuardState(case1, "mock", "refund-guard-deterministic-v1");
+      state.publishSentinelFinding(bad);
+      const gate = new RefundInterceptionGate(state, 50);
+      const next = await gate.handle(
+        makeDirectProposalTransition({
+          checkoutId: case1.checkoutId,
+          debitSellerId: "SELLER-A",
+          refundAmountKsh: 10_000,
+          epoch: 1,
+          rationale: "test",
+        }),
+      );
+      expect(next.nextStateId).toBe("model_message");
+      expect(state.verdict).toBe("HOLD_MISSING_EVIDENCE");
+    }
+  });
 });

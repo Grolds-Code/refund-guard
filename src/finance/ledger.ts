@@ -7,6 +7,7 @@ import {
   type ScenarioFixture,
   type SellerId,
   type SentinelFinding,
+  type SettlementRecord,
 } from "./types.js";
 
 const SELLER_IDS: readonly SellerId[] = ["SELLER-A", "SELLER-B"];
@@ -20,17 +21,44 @@ export interface MoneyReconciliationCheck {
   readonly error: string | null;
 }
 
+function deduplicateSettlements(settlements: readonly SettlementRecord[]): {
+  unique: SettlementRecord[];
+  duplicateIds: string[];
+} {
+  const seen = new Set<string>();
+  const unique: SettlementRecord[] = [];
+  const duplicateIds: string[] = [];
+  for (const st of settlements) {
+    if (seen.has(st.settlementId)) {
+      duplicateIds.push(st.settlementId);
+      continue;
+    }
+    seen.add(st.settlementId);
+    unique.push(st);
+  }
+  return { unique, duplicateIds };
+}
+
 /**
  * Deterministic pre-clearance money reconciliation check.
- * Ensures the draft refund amount, seller draft lines, posted processor refund
- * settlement (when present), and proposed refund amount reconcile to the shilling.
+ * Enforces:
+ * - Each settlementId is counted at most once (duplicate settlement IDs fail closed).
+ * - Draft refund, ticket requested refund, posted processor refund (when present),
+ *   draft seller deductions (including explicit 0-deduction not-yet-applied drafts),
+ *   and proposed refund amount all reconcile cleanly.
+ * - When a verified returned order line is known, refund amount cannot exceed that
+ *   verified line's refundable amount.
  */
 export function checkMoneyReconciliation(
   scenario: ScenarioFixture,
   proposedRefundAmountKsh?: number,
+  verifiedLineId?: string | null,
 ): MoneyReconciliationCheck {
-  const captureSettlements = scenario.settlements.filter((s) => s.kind === "CAPTURE");
-  const refundSettlements = scenario.settlements.filter((s) => s.kind === "REFUND");
+  const { unique: uniqueSettlements, duplicateIds } = deduplicateSettlements(
+    scenario.settlements,
+  );
+  const captureSettlements = uniqueSettlements.filter((s) => s.kind === "CAPTURE");
+  const refundSettlements = uniqueSettlements.filter((s) => s.kind === "REFUND");
 
   const checkoutCaptureKsh = captureSettlements.reduce((sum, s) => sum + s.amountKsh, 0);
   const priorBatchGrossKsh = SELLER_IDS.reduce(
@@ -53,8 +81,25 @@ export function checkMoneyReconciliation(
 
   const errors: string[] = [];
 
+  if (duplicateIds.length > 0) {
+    errors.push(
+      `Duplicate settlement record ID(s) detected: ${Array.from(new Set(duplicateIds)).join(", ")}.`,
+    );
+  }
+
   if (!Number.isInteger(scenario.draft.refundAmountKsh) || scenario.draft.refundAmountKsh <= 0) {
-    errors.push(`Draft refund amount (${scenario.draft.refundAmountKsh}) must be a positive integer.`);
+    errors.push(
+      `Draft refund amount (${scenario.draft.refundAmountKsh}) must be a positive integer.`,
+    );
+  }
+
+  if (
+    !Number.isInteger(scenario.ticket.requestedRefundKsh) ||
+    scenario.ticket.requestedRefundKsh <= 0
+  ) {
+    errors.push(
+      `Ticket requested refund (${scenario.ticket.requestedRefundKsh}) must be a positive integer.`,
+    );
   }
 
   if (scenario.draft.refundAmountKsh > checkoutCaptureKsh) {
@@ -63,7 +108,14 @@ export function checkMoneyReconciliation(
     );
   }
 
-  // Verify internal draft line arithmetic
+  // Flag unexplained differences between customer ticket requested refund and draft/posted refund.
+  if (scenario.ticket.requestedRefundKsh !== scenario.draft.refundAmountKsh) {
+    errors.push(
+      `Ticket requested refund (${formatKsh(scenario.ticket.requestedRefundKsh)}) does not match draft refund (${formatKsh(scenario.draft.refundAmountKsh)}).`,
+    );
+  }
+
+  // Verify internal draft line arithmetic and deduction bounds
   for (const sellerId of SELLER_IDS) {
     const line = scenario.draft.sellerLines.find((l) => l.sellerId === sellerId);
     if (!line) {
@@ -79,6 +131,15 @@ export function checkMoneyReconciliation(
         `Draft gross for ${sellerId} (${formatKsh(line.grossSalesKsh)}) != source gross (${formatKsh(expectedGrossKsh)}).`,
       );
     }
+    if (
+      !Number.isInteger(line.refundDeductionKsh) ||
+      line.refundDeductionKsh < 0 ||
+      line.refundDeductionKsh > line.grossSalesKsh
+    ) {
+      errors.push(
+        `Draft deduction for ${sellerId} (${formatKsh(line.refundDeductionKsh)}) is out of valid bounds.`,
+      );
+    }
     if (line.grossSalesKsh - line.refundDeductionKsh !== line.netPayoutKsh) {
       errors.push(
         `Draft net payout arithmetic mismatch for ${sellerId} (${formatKsh(line.grossSalesKsh)} - ${formatKsh(line.refundDeductionKsh)} != ${formatKsh(line.netPayoutKsh)}).`,
@@ -92,6 +153,11 @@ export function checkMoneyReconciliation(
         `Draft refund (${formatKsh(scenario.draft.refundAmountKsh)}) does not match posted settlement refund (${formatKsh(confirmedRefundKsh)}).`,
       );
     }
+    if (scenario.ticket.requestedRefundKsh !== confirmedRefundKsh) {
+      errors.push(
+        `Ticket requested refund (${formatKsh(scenario.ticket.requestedRefundKsh)}) does not match posted settlement refund (${formatKsh(confirmedRefundKsh)}).`,
+      );
+    }
     if (draftDeductionTotalKsh !== confirmedRefundKsh) {
       errors.push(
         `Draft seller deductions (${formatKsh(draftDeductionTotalKsh)}) do not match posted settlement refund (${formatKsh(confirmedRefundKsh)}).`,
@@ -103,9 +169,36 @@ export function checkMoneyReconciliation(
       );
     }
   } else {
-    if (scenario.draft.refundAmountKsh !== scenario.ticket.requestedRefundKsh) {
+    // When no processor refund has posted yet, draft seller deductions must be either
+    // explicitly 0 (not-yet-applied draft) or exactly equal to draft.refundAmountKsh.
+    if (
+      draftDeductionTotalKsh !== 0 &&
+      draftDeductionTotalKsh !== scenario.draft.refundAmountKsh
+    ) {
       errors.push(
-        `Draft refund (${formatKsh(scenario.draft.refundAmountKsh)}) does not match ticket requested refund (${formatKsh(scenario.ticket.requestedRefundKsh)}).`,
+        `Draft seller deductions (${formatKsh(draftDeductionTotalKsh)}) do not match pending refund (${formatKsh(scenario.draft.refundAmountKsh)}) or an unapplied zero-deduction draft.`,
+      );
+    }
+    const expectedDraftTotalKsh = batchGrossKsh - draftDeductionTotalKsh;
+    if (draftTotalKsh !== expectedDraftTotalKsh) {
+      errors.push(
+        `Draft payable total (${formatKsh(draftTotalKsh)}) does not equal batch gross minus draft deductions (${formatKsh(expectedDraftTotalKsh)}).`,
+      );
+    }
+  }
+
+  // Cap refund against the verified returned order line's refundable amount.
+  if (verifiedLineId) {
+    const verifiedLine = scenario.orderLines.find((ol) => ol.lineId === verifiedLineId);
+    if (!verifiedLine) {
+      errors.push(`Verified line ${verifiedLineId} not found in orderLines.`);
+    } else if (expectedRefundKsh > verifiedLine.amountKsh) {
+      errors.push(
+        `Refund amount (${formatKsh(expectedRefundKsh)}) exceeds verified returned line ${verifiedLine.lineId} refundable amount (${formatKsh(verifiedLine.amountKsh)}).`,
+      );
+    } else if (scenario.draft.refundAmountKsh > verifiedLine.amountKsh) {
+      errors.push(
+        `Draft refund (${formatKsh(scenario.draft.refundAmountKsh)}) exceeds verified returned line ${verifiedLine.lineId} refundable amount (${formatKsh(verifiedLine.amountKsh)}).`,
       );
     }
   }
@@ -132,22 +225,7 @@ export function checkMoneyReconciliation(
 /**
  * Pure deterministic financial calculator.
  * Zero floating point, zero LLM arithmetic. Every shilling is derived strictly
- * from immutable source records and carries explicit provenance IDs.
- *
- * Hold Policy:
- * - Approved verdicts (`READY_FOR_HUMAN_APPROVAL`, `CORRECTED_READY_FOR_APPROVAL`):
- *   release full reconciled net batch; deduct confirmed refund only from the verified seller.
- * - Dispute collision (`FROZEN_DISPUTE_COLLISION`) with a HIGH-confidence verified seller line:
- *   block the unsafe cross-system refund proposal and hold the verified disputed seller's
- *   checkout line (plus any already-posted refund deduction) in reserve while leaving the
- *   undisputed seller clear. Never falls back to the untrusted draft seller when evidence
- *   is missing or unverified.
- * - Missing evidence, reconciliation mismatch, ambiguous dispute match, pending revalidation,
- *   or dispute collision without a verified returned seller:
- *   withhold both checkout lines from gross seller payouts rather than guessing which seller
- *   absorbs liability. `totalWithheldFromGrossKsh` reports total checkout sales withheld from
- *   sellers; `heldReserveKsh` reports the cash reserve held out of `netBatchTotalKsh`
- *   (net settlement after any posted processor refund).
+ * from deduplicated immutable source records and carries explicit provenance IDs.
  */
 export function computeGroundedLedger(
   scenario: ScenarioFixture,
@@ -155,9 +233,11 @@ export function computeGroundedLedger(
   supportedDebitSellerId: SellerId | null,
   sentinelFinding: SentinelFinding | null,
   disputeEvaluation: DisputeMatchEvaluation | null = null,
+  activeDisputeAmountKsh: number | null = null,
 ): GroundedLedgerResult {
-  const captureSettlements = scenario.settlements.filter((s) => s.kind === "CAPTURE");
-  const refundSettlements = scenario.settlements.filter((s) => s.kind === "REFUND");
+  const { unique: uniqueSettlements } = deduplicateSettlements(scenario.settlements);
+  const captureSettlements = uniqueSettlements.filter((s) => s.kind === "CAPTURE");
+  const refundSettlements = uniqueSettlements.filter((s) => s.kind === "REFUND");
 
   const checkoutCaptureKsh = captureSettlements.reduce((sum, s) => sum + s.amountKsh, 0);
   const priorBatchGrossKsh = SELLER_IDS.reduce(
@@ -174,30 +254,49 @@ export function computeGroundedLedger(
     0,
   );
 
-  const recon = checkMoneyReconciliation(scenario);
-  const refundAmount = confirmedRefundKsh > 0 ? confirmedRefundKsh : scenario.draft.refundAmountKsh;
+  const recon = checkMoneyReconciliation(
+    scenario,
+    undefined,
+    sentinelFinding?.status === "VERIFIED_RETURN" ? sentinelFinding.verifiedLineId : null,
+  );
+  const refundAmount =
+    confirmedRefundKsh > 0 ? confirmedRefundKsh : scenario.draft.refundAmountKsh;
   const isApproved = isVerdictApprovable(verdict);
 
-  // Only attribute a single-seller dispute reserve when Sentinel verified the specific
-  // returned seller & line with HIGH confidence. Never fall back to the untrusted draft.
-  const verifiedDisputedSellerId: SellerId | null =
+  // Only attribute a single-seller dispute reserve when:
+  // 1) Sentinel verified the specific returned seller & line with HIGH confidence, AND
+  // 2) The disputed amount does NOT exceed that seller's checkout line (if it exceeds a
+  //    single seller's line, e.g. a checkout-wide KSh 20,000 dispute, hold both sellers).
+  let verifiedDisputedSellerId: SellerId | null = null;
+  let verifiedDisputedSellerLineKsh = 0;
+  if (
     verdict === "FROZEN_DISPUTE_COLLISION" &&
     sentinelFinding !== null &&
     sentinelFinding.confidence === "HIGH" &&
-    sentinelFinding.verifiedSellerId !== null &&
-    scenario.orderLines.some(
+    sentinelFinding.verifiedSellerId !== null
+  ) {
+    const sellerLine = scenario.orderLines.find(
       (ol) =>
         ol.sellerId === sentinelFinding.verifiedSellerId &&
         (sentinelFinding.verifiedLineId === null ||
           ol.lineId === sentinelFinding.verifiedLineId),
-    )
-      ? sentinelFinding.verifiedSellerId
-      : null;
+    );
+    if (sellerLine) {
+      const sellerCheckoutSalesKsh = scenario.orderLines
+        .filter((ol) => ol.sellerId === sellerLine.sellerId)
+        .reduce((sum, ol) => sum + ol.amountKsh, 0);
+      const effectiveDisputeAmt = activeDisputeAmountKsh ?? sellerCheckoutSalesKsh;
+      if (effectiveDisputeAmt <= sellerCheckoutSalesKsh) {
+        verifiedDisputedSellerId = sellerLine.sellerId;
+        verifiedDisputedSellerLineKsh = effectiveDisputeAmt;
+      }
+    }
+  }
 
   const baseCitations = [
     scenario.draft.draftId,
     scenario.ticket.ticketId,
-    ...scenario.settlements.map((s) => s.settlementId),
+    ...uniqueSettlements.map((s) => s.settlementId),
   ];
 
   const lines: GroundedAllocationLine[] = SELLER_IDS.map((sellerId) => {
@@ -220,15 +319,15 @@ export function computeGroundedLedger(
     if (isApproved) {
       supportedDeductionKsh = supportedDebitSellerId === sellerId ? refundAmount : 0;
     } else if (verdict === "FROZEN_DISPUTE_COLLISION" && verifiedDisputedSellerId !== null) {
-      // Hold the verified disputed seller's checkout line, plus any already-posted refund
-      // against that same seller so active/lost dispute reserve never collapses to KSh 0.
+      // Reserve the exact verified dispute amount (plus any already-posted refund against
+      // that seller so active/lost dispute exposure never collapses to KSh 0).
       supportedDeductionKsh =
         sellerId === verifiedDisputedSellerId
-          ? Math.min(grossSalesKsh, checkoutSalesKsh + confirmedRefundKsh)
+          ? Math.min(grossSalesKsh, verifiedDisputedSellerLineKsh + confirmedRefundKsh)
           : 0;
     } else {
-      // Unresolved attribution or reconciliation mismatch: withhold this seller's
-      // checkout line from gross payout rather than guessing liability.
+      // Unresolved seller attribution, checkout-wide dispute, or reconciliation mismatch:
+      // withhold this seller's checkout line from gross payout rather than guessing liability.
       supportedDeductionKsh = checkoutSalesKsh;
     }
 
@@ -277,8 +376,10 @@ export function computeGroundedLedger(
   const blockedUnsafeRefundKsh =
     verdict === "FROZEN_DISPUTE_COLLISION" ? requestedRefundKsh : 0;
 
+  const pendingRefundKsh = isApproved && confirmedRefundKsh === 0 ? refundAmount : 0;
+
   const totalWithheldFromGrossKsh = Math.max(0, batchGrossKsh - supportedTotalKsh);
-  // Cash reserve held out of the net bank settlement (`netBatchTotalKsh`), separate from
+  // Cash reserve held out of net bank settlement (`netBatchTotalKsh`), separate from
   // any processor refund already deducted by the PSP (`confirmedRefundKsh`).
   const heldReserveKsh = isApproved
     ? 0
@@ -286,20 +387,29 @@ export function computeGroundedLedger(
 
   let holdPolicyExplanation: string;
   if (isApproved) {
-    holdPolicyExplanation =
-      misallocationCaughtKsh > 0
-        ? `Batch total remains ${formatKsh(supportedTotalKsh)}; ${formatKsh(misallocationCaughtKsh)} refund deduction reallocated to verified seller ${supportedDebitSellerId}.`
-        : `No reserve held; ${formatKsh(supportedTotalKsh)} cleared for human approval.`;
+    if (pendingRefundKsh > 0) {
+      holdPolicyExplanation = `No reserve held; ${formatKsh(supportedTotalKsh)} cleared for human approval (${formatKsh(pendingRefundKsh)} pending refund deduction against ${formatKsh(netBatchTotalKsh)} posted net settlement; debited to verified seller ${supportedDebitSellerId}).`;
+    } else if (misallocationCaughtKsh > 0) {
+      holdPolicyExplanation = `Batch total remains ${formatKsh(supportedTotalKsh)}; ${formatKsh(misallocationCaughtKsh)} refund deduction reallocated to verified seller ${supportedDebitSellerId}.`;
+    } else {
+      holdPolicyExplanation = `No reserve held; ${formatKsh(supportedTotalKsh)} cleared for human approval.`;
+    }
   } else if (verdict === "HOLD_RECONCILIATION_MISMATCH") {
-    holdPolicyExplanation = `Reconciliation mismatch blocked clearance: ${recon.error ?? "draft and posted settlement totals do not match"}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}).`;
+    holdPolicyExplanation = `Reconciliation mismatch blocked clearance: ${recon.error ?? "draft, line, and posted settlement totals do not match"}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}).`;
   } else if (verdict === "FROZEN_DISPUTE_COLLISION" && verifiedDisputedSellerId) {
     const disputeKind =
       disputeEvaluation?.matchState === "VERIFIED_LOST_DISPUTE"
         ? "prior lost chargeback (CLOSED_LOST)"
         : "active dispute";
-    holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (${verifiedDisputedSellerId}'s verified disputed line held due to ${disputeKind}; undisputed seller payout remains clear).`;
+    holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (${verifiedDisputedSellerId}'s verified disputed exposure of ${formatKsh(verifiedDisputedSellerLineKsh)} held due to ${disputeKind}; undisputed seller payout remains clear).`;
   } else if (verdict === "FROZEN_DISPUTE_COLLISION") {
-    holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}; disputed seller line unverified so both checkout lines are held without guessing from the draft).`;
+    const checkoutWide =
+      activeDisputeAmountKsh !== null &&
+      sentinelFinding?.verifiedSellerId !== null &&
+      sentinelFinding?.confidence === "HIGH";
+    holdPolicyExplanation = checkoutWide
+      ? `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Checkout-wide dispute (${formatKsh(activeDisputeAmountKsh)}) exceeds a single seller line; holding both checkout lines (${formatKsh(totalWithheldFromGrossKsh)} withheld, ${formatKsh(heldReserveKsh)} cash reserve) for allocation review.`
+      : `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}; disputed seller line unverified so both checkout lines are held without guessing from the draft).`;
   } else if (verdict === "VERIFY_DISPUTE_MATCH") {
     holdPolicyExplanation = `Requested refund: ${formatKsh(requestedRefundKsh)}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}; both checkout lines held pending operator verification of ambiguous dispute match).`;
   } else if (verdict === "PENDING_REVALIDATION") {
@@ -327,6 +437,7 @@ export function computeGroundedLedger(
     batchGrossKsh,
     confirmedRefundKsh,
     requestedRefundKsh,
+    pendingRefundKsh,
     netBatchTotalKsh,
     draftTotalKsh,
     supportedTotalKsh,

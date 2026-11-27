@@ -235,7 +235,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
     title: "4. Late Warehouse Correction Mid-Flight (Epoch Invalidation)",
     shortLabel: "Mid-Flight Correction",
     summary:
-      "Initial exterior barcode scan logs Seller B's footwear box, so Agent 1 starts approving Seller B. Mid-flight, QC opens the box, finds Seller A's jacket, bumps epoch 1->2, and the interceptor rejects the stale approval.",
+      "Initial physical bench intake logs Seller B's boots from the reused box, so Agent 1 starts approving Seller B. Mid-flight, supervisor QC bench re-inspection opens the inner sleeve, finds Seller A's jacket, bumps epoch 1->2, and invalidates the stale approval.",
     policySummary: POLICY_SUMMARY,
     batchId: "BATCH-BF-2026-01",
     checkoutId: "CHK-402",
@@ -277,7 +277,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
       noteId: "WH-404-V1",
       receivedAt: "2026-11-26T14:22:00+03:00",
       hub: "Kisumu Returns Hub",
-      text: "Dock scan logged for CHK-402: checked in 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear / Seller B) from exterior box barcode; routed to Seller B return bin.",
+      text: "Physical bench intake for CHK-402: clerk opened carton and logged 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear / Seller B) into Seller B return bin.",
     },
     midFlightInjection: {
       delayMs: 110,
@@ -287,7 +287,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
         receivedAt: "2026-11-26T14:23:05+03:00",
         hub: "Kisumu Returns Hub (QC Bench)",
         supersedesNoteId: "WH-404-V1",
-        text: "CORRECTION superseding WH-404-V1: Opened the shoebox at QC bench. Inside is actually the Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Customer reused the boot box; boots were NOT returned.",
+        text: "CORRECTION superseding WH-404-V1: Supervisor QC bench re-inspection opened the inner garment bag inside the reused shoebox. Inside is actually 1x Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Boots were NOT returned.",
       },
     },
   },

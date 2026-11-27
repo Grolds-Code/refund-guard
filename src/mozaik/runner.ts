@@ -422,7 +422,7 @@ function isWarehouseNoteMissingOrTentative(noteText: string): boolean {
     .replace(/\b(nothing|none|no\s+items?)\s+missing\b/g, "complete");
 
   if (
-    /\b(no parcel|label created only|unverified|empty box|ambiguous|unknown item|pending delivery|pending bench|pending inspection|pending qc|tentative|preliminary|unopened|not yet opened|not yet inspected|both items|both products|all items)\b/i.test(
+    /\b(no parcel|label created only|label only|barcode only|carton barcode only|manifest only|contents never checked|never checked|not checked|unverified|empty box|ambiguous|unknown item|pending delivery|pending bench|pending inspection|pending qc|tentative|preliminary|unopened|not yet opened|not yet inspected|both items|both products|all items|still in transit|in transit|expected tomorrow|expected to arrive|could not locate|cannot locate|hub has not seen|has not seen|not the ordered item|wrong brand|wrong item|customer claims)\b/i.test(
       normalized,
     )
   ) {
@@ -442,15 +442,15 @@ function inferWarehouseOrderLine(
 ): ParsedOrderLine | null {
   const lowerNote = noteText.toLowerCase();
 
-  // Split into clauses so negations ("did not receive jacket", "boots were NOT returned",
-  // "customer kept the jacket") only suppress the negated clause rather than positive clauses.
+  // Split into clauses so negations ("did not receive jacket", "jacket wasn't in the box",
+  // "boots were NOT returned", "customer kept the jacket") suppress only the negated clause.
   const positiveClauses = lowerNote
     .split(/[.;!\n]+/)
     .map((c) => c.trim())
     .filter((c) => c.length > 0)
     .filter(
       (c) =>
-        !/\b(did not receive|didn't receive|never received|not received|was not|were not|not returned|not in parcel|no boots|no jacket|kept by|customer kept|buyer kept|kept the|reused the .* box)\b/i.test(
+        !/\b(did not receive|didn't receive|never received|not received|wasn't in the box|was not in the box|not in the box|was not|were not|not returned|not in parcel|no boots|no jacket|kept by|customer kept|buyer kept|kept the|reused the .* box)\b/i.test(
           c,
         ),
     );

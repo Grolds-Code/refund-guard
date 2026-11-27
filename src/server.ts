@@ -218,6 +218,7 @@ export function createRefundGuardServer(): Server {
             invalidatedPriorApproval: resInj.invalidatedPriorApproval,
             currentVerdict: snap.verdict,
             approvable: snap.approvable,
+            report: snap.report,
           });
           return;
         }
@@ -238,6 +239,7 @@ export function createRefundGuardServer(): Server {
             invalidatedPriorApproval: resInj.invalidatedPriorApproval,
             currentVerdict: snap.verdict,
             approvable: snap.approvable,
+            report: snap.report,
           });
           return;
         }
@@ -254,6 +256,7 @@ export function createRefundGuardServer(): Server {
             invalidatedPriorApproval: resInj.invalidatedPriorApproval,
             currentVerdict: snap.verdict,
             approvable: snap.approvable,
+            report: snap.report,
           });
           return;
         }

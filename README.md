@@ -6,10 +6,10 @@
 | :--- | :--- |
 | **Event & Track** | JigJoy Black Friday AI Hackathon (26-27 November 2026, Agents in Finance) |
 | **Runtime** | `@mozaik-ai/core@6.0.0` (TypeScript, Node.js 20+, MIT License) |
-| **Concurrency Model** | 2 concurrent `Agent` loops per checkout + shared `RuntimeState` + reactive `SituationHandler`s + awaited `InterceptionHandler` + `AuditObserver` |
-| **Approval Safety** | Server-side `POST /api/sessions/:id/approve` enforces current-epoch & verdict eligibility (returns **HTTP 409 Conflict** on stale epochs or held/frozen verdicts) |
-| **Automated Verification** | **23 / 23** Vitest tests passing (core cases, money reconciliation, dispute identity & `CLOSED_LOST`/`CLOSED_WON`, direct gate validation, mock parser edge cases, 4-checkout batch, HTTP 409 approval gate) |
-| **Zero-Key Reproducibility** | Full test suite, benchmark, and interactive UI run out of the box via a deterministic **rule-based parser** (`npm ci && npm test`); live OpenAI / Anthropic / Gemini enabled automatically via `.env` |
+| **Concurrency Model** | 2 concurrent `Agent` loops per checkout (`RefundDeskAgent` evidence-light proposer + `DisputeFulfillmentSentinel` evidence auditor) + shared `RuntimeState` + awaited `InterceptionHandler` + `AuditObserver` |
+| **Approval Safety** | Server-side `POST /api/sessions/:id/approve` enforces current-epoch & verdict eligibility in memory (returns **HTTP 409 Conflict** on stale epochs or held/frozen verdicts); Batch Desk triage is clearly labeled as local preview state |
+| **Automated Verification** | **27 / 27** Vitest tests passing (core cases, line-level reconciliation & duplicate settlement dedup, dispute identity/closure/replay safety, affirmative physical receipt & non-return parser checks, direct gate fuzzing, HTTP 409 approval gate) |
+| **Zero-Key Reproducibility** | Full test suite, benchmark, and interactive UI run out of the box via a deterministic **rule-based parser (limited to tested phrasings)** (`npm ci && npm test`); live OpenAI / Anthropic / Gemini enabled via `.env` |
 | **Data Safety** | 100% synthetic orders, settlements, warehouse notes, and disputes; no real customer data, accounts, or money movement |
 
 ---
@@ -18,25 +18,28 @@
 
 Traditional payout reconciliation verifies that **totals match** (`sum(seller_payouts) == bank_settlement`), which leaves three high-cost marketplace failure modes exposed:
 
-1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in checkout `CHK-402`. The processor confirms a KSh 10,000 refund and settles **KSh 90,000** net. The draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances to the exact shilling (KSh 90,000)** and passes total reconciliation even though warehouse notes prove **Seller A's** jacket returned (supported allocation: **A: KSh 50,000 / B: KSh 40,000**).
-2. **Stale Mid-Flight & Post-Acceptance Approvals:** If a late QC warehouse inspection or issuing-bank dispute arrives while review is running (or after an approval was already rendered on screen), any clearance based on the superseded epoch must expire immediately, both inside the agent runtime and at the human approval endpoint (**HTTP 409 Conflict**).
-3. **Unsafe Cross-System Refunds & Prior Lost Disputes:** Card processors such as Stripe already restrict refunding a charge directly while a dispute is open ([Stripe Disputes Docs](https://docs.stripe.com/disputes/how-disputes-work#during-the-dispute)), and Adyen validates split instruction syntax rather than physical return truth ([Adyen Split Refunds](https://docs.adyen.com/marketplaces/split-transactions/split-refunds)). In multi-system marketplaces, however, support desks, OMS queues, 3PL warehouse notes, and payout drafts operate separately. RefundGuard deterministically verifies payment-to-dispute linkage (requiring card last-4, explicit `paymentSettlementId`, no conflicting checkout suffix, and amount within capture), freezes both `OPEN` and prior `CLOSED_LOST` matches (preventing double-refunds after a lost chargeback), replaces `OPEN` records when `CLOSED_WON` arrives for the same `disputeId`, asks operators to verify partial/conflicting signals, and ignores unrelated or `CLOSED_WON`/`WITHDRAWN` disputes.
+1. **Zero-Sum Wrong-Seller Misallocation & Line-Level Over-Refunds:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in checkout `CHK-402`. The processor confirms a KSh 10,000 refund and settles **KSh 90,000** net. The draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances to the exact shilling (KSh 90,000)** and passes total reconciliation even though physical inspection proves **Seller A's** jacket returned (supported allocation: **A: KSh 50,000 / B: KSh 40,000**). Refunds must also never exceed the verified returned order line's refundable amount, duplicate settlement records must not double-count, and unexplained ticket/draft mismatches must fail closed.
+2. **Stale Mid-Flight, Post-Acceptance, & Out-of-Order Evidence:** If a late QC warehouse inspection or issuing-bank dispute arrives while review is running (or after an approval was already rendered on screen), any clearance based on the superseded epoch must expire immediately, both inside the agent runtime and at the human approval endpoint (**HTTP 409 Conflict**). Conversely, delayed redelivery of an already-superseded warehouse note (`WH-404-V1` after `WH-404-V2`) or a delayed `OPEN` replay after `CLOSED_WON` must not restore stale state.
+3. **Unsafe Cross-System Refunds & Prior Lost Disputes:** Card processors such as Stripe already restrict refunding a charge directly while a dispute is open ([Stripe Disputes Docs](https://docs.stripe.com/disputes/how-disputes-work#during-the-dispute)), and Adyen validates split instruction syntax rather than physical return truth ([Adyen Split Refunds](https://docs.adyen.com/marketplaces/split-transactions/split-refunds)). In multi-system marketplaces, however, support desks, OMS queues, 3PL warehouse notes, and payout drafts operate separately. RefundGuard deterministically verifies payment-to-dispute linkage (card last-4, explicit `paymentSettlementId`, no conflicting checkout suffix, amount within capture), freezes both `OPEN` and terminal `CLOSED_LOST` matches, requires matching payment identity and valid non-terminal transitions before applying `CLOSED_WON`, sizes reserves to the actual disputed amount (holding both sellers on checkout-wide disputes exceeding a single line), and ignores unrelated or already-resolved disputes.
 
 ---
 
 ## 2. How Our Agents Run Concurrently on Mozaik
 
-RefundGuard runs natively on `@mozaik-ai/core@6.0.0`'s reactive concurrency primitives to react while work is in flight:
+RefundGuard runs natively on `@mozaik-ai/core@6.0.0`'s reactive concurrency primitives. To be transparent about responsibilities:
+- **`RefundDeskAgent`** is an **evidence-light proposer**: it reads the customer ticket, policy, and payout draft (not warehouse notes) and proposes a seller debit via `propose_refund`.
+- **`DisputeFulfillmentSentinel`** runs concurrently in a parallel non-blocking `runLoop`, auditing physical warehouse inspection notes and issuing-bank dispute webhooks and publishing structured findings to shared `RefundGuardState`.
+- **`RefundInterceptionGate` + Deterministic Ledger Code** control clearance: the awaited `InterceptionHandler` pauses `propose_refund` before execution, validates every Sentinel and Desk field against immutable source records, reconciles amounts at the verified line level, and blocks/rewrites stale or wrong-seller calls or halts fail-closed.
 
 ```mermaid
 flowchart LR
   Op["OperatorFeed (Human)\nPublishes case.opened & evidence.updated"]
-  State["RefundGuardState\n(Mozaik RuntimeState)\n• immutable source records\n• monotonic epoch counter\n• dispute upsert by disputeId\n• readiness invalidation"]
-  A1["Agent 1: RefundDeskAgent\n(non-blocking runLoop)\nReads ticket + policy + draft\nCalls propose_refund(...)"]
-  A2["Agent 2: DisputeFulfillmentSentinel\n(non-blocking runLoop)\nParses warehouse notes +\nverifies PSP dispute links\nCalls publish_sentinel_finding(...)"]
+  State["RefundGuardState\n(Mozaik RuntimeState)\n• immutable source records\n• replay-safe note supersession\n• terminal dispute transitions\n• monotonic epoch & invalidation"]
+  A1["Agent 1: RefundDeskAgent\n(evidence-light proposer)\nReads ticket + policy + draft\nCalls propose_refund(...)"]
+  A2["Agent 2: DisputeFulfillmentSentinel\n(concurrent evidence auditor)\nAudits physical notes +\nverifies PSP dispute links\nCalls publish_sentinel_finding(...)"]
   Gate["RefundInterceptionGate\n(awaited InterceptionHandler\non nextStateId === 'function_call')"]
-  Calc["Deterministic Ledger & Approval Gate\n(src/finance/ledger.ts + /approve 409)\nPure integer KSh math +\nsource ID citations"]
-  Obs["AuditObserver\nRecords overlap ms &\nSemanticEvent trace"]
+  Calc["Deterministic Ledger & Approval Gate\n(src/finance/ledger.ts + /approve 409)\nInteger KSh math, line caps &\nsource ID citations"]
+  Obs["AuditObserver\nRecords overlap ms &\ntags stale loop completions"]
 
   Op -- "case.opened" --> A1
   Op -- "case.opened & evidence.updated" --> A2
@@ -55,23 +58,23 @@ flowchart LR
 
 | Mozaik Primitive | Implementation | Role in RefundGuard |
 | :--- | :--- | :--- |
-| `defineRuntime<RefundGuardState>()` | [`src/mozaik/runtime.ts`](src/mozaik/runtime.ts) | Isolated runtime per checkout session with shared mutable `RefundGuardState` (`epoch`, `sentinelFindings`, `supersededProposals`, dispute upsert by `disputeId`, `interceptions`, `timeline`). |
-| Non-blocking `runLoop` + `SituationHandler` | [`src/mozaik/agents/refund-desk.ts`](src/mozaik/agents/refund-desk.ts), [`src/mozaik/agents/sentinel.ts`](src/mozaik/agents/sentinel.ts) | `case.opened` fans out synchronously to both agents, launching two independent `runLoop`s in parallel. `evidence.updated` wakes Sentinel on live updates and triggers RefundDesk revalidation when prior approval is invalidated or an open dispute closes (`CLOSED_WON`). |
-| Awaited `InterceptionHandler` | [`src/mozaik/interception.ts`](src/mozaik/interception.ts) | Passed as the 4th argument to `RefundDeskAgent`'s `runLoop`. Hooks `nextStateId === "function_call"` (`propose_refund`), blocks duplicate proposals in an already-accepted epoch, performs a bounded wait for Sentinel on the latest `epoch`, validates money reconciliation and every Sentinel/Desk field without draft fallback, and rewrites wrong/stale calls (appending `[call, blockedToolOutput]` for strict OpenAI/Anthropic/Gemini compatibility) or halts fail-closed. |
-| `AuditObserver` (`createHuman`) | [`src/mozaik/agents/observer.ts`](src/mozaik/agents/observer.ts) | Listens to `model.answer`, `interception.started`, and `interception.finished` `SemanticEvent`s and measures exact millisecond overlap between both agents inside each checkout. |
-| Custom `InferenceRunner` | [`src/mozaik/runner.ts`](src/mozaik/runner.ts) | Auto-selects live Mozaik models (`gpt-5.4-mini`, `claude-haiku-4-5`, `gemini-3.5-flash`, or custom `gpt-4o-mini`) when an API key is set, or falls back to `RefundGuardMockRunner` (a deterministic rule-based parser with limited free-text coverage) for zero-key verification. |
+| `defineRuntime<RefundGuardState>()` | [`src/mozaik/runtime.ts`](src/mozaik/runtime.ts) | Isolated runtime per checkout session with shared mutable `RefundGuardState` (`epoch`, replay-safe warehouse supersession, identity-checked terminal dispute transitions, `sentinelFindings`, `supersededProposals`, `interceptions`, `timeline`). |
+| Non-blocking `runLoop` + `SituationHandler` | [`src/mozaik/agents/refund-desk.ts`](src/mozaik/agents/refund-desk.ts), [`src/mozaik/agents/sentinel.ts`](src/mozaik/agents/sentinel.ts) | `case.opened` fans out synchronously to both agents, launching two independent `runLoop`s in parallel. `evidence.updated` wakes Sentinel on effective evidence changes and triggers RefundDesk revalidation when prior approval is invalidated or an open dispute validly closes (`OPEN -> CLOSED_WON`). |
+| Awaited `InterceptionHandler` | [`src/mozaik/interception.ts`](src/mozaik/interception.ts) | Passed as the 4th argument to `RefundDeskAgent`'s `runLoop`. Hooks `nextStateId === "function_call"` (`propose_refund`), blocks duplicate proposals in an already-accepted epoch, performs a bounded wait for Sentinel, verifies money reconciliation (including verified line refundable cap), validates exact `checkoutId`, `HIGH` confidence, seller-owned `verifiedLineId`, latest `evidenceNoteId`, and known `citedSourceIds`, and rewrites wrong/stale calls (appending `[call, blockedToolOutput]`) or halts fail-closed. |
+| `AuditObserver` (`createHuman`) | [`src/mozaik/agents/observer.ts`](src/mozaik/agents/observer.ts) | Listens to `model.answer`, `interception.started`, and `interception.finished` `SemanticEvent`s, records millisecond overlap, and marks superseded loop completion messages as `[STALE epoch X superseded by epoch Y]`. |
+| Custom `InferenceRunner` | [`src/mozaik/runner.ts`](src/mozaik/runner.ts) | Auto-selects live Mozaik models (`gpt-5.4-mini`, `claude-haiku-4-5`, `gemini-3.5-flash`, or custom `gpt-4o-mini`) when an API key is set, or falls back to `RefundGuardMockRunner` (a deterministic rule-based parser limited to tested phrasings) for zero-key verification. |
 
 ### Core Safety Invariants
-1. **Pre-Clearance Money Reconciliation ([`src/finance/ledger.ts`](src/finance/ledger.ts), [`src/engine/run-case.ts`](src/engine/run-case.ts)):** No payout can clear (`READY_FOR_HUMAN_APPROVAL` or `CORRECTED_READY_FOR_APPROVAL`) unless the draft refund amount, seller draft lines, proposed amount, and posted processor refund settlement reconcile to the exact shilling; otherwise the gate fails closed to `HOLD_RECONCILIATION_MISMATCH`.
-2. **Strict Sentinel & Proposal Validation ([`src/mozaik/interception.ts`](src/mozaik/interception.ts)):** The gate never blindly trusts Sentinel or RefundDesk. Clearance requires exact `checkoutId`, current `epoch`, `confidence === "HIGH"`, a `verifiedLineId` owned by `verifiedSellerId`, exact match to the latest warehouse `noteId`, zero draft fallback for invalid sellers, and a bounded Sentinel wait (never spinning infinitely). Duplicate `propose_refund` calls in the same epoch are blocked (`DUPLICATE_PROPOSAL_BLOCKED`).
-3. **Deterministic Dispute Linkage & Closure ([`src/finance/dispute-match.ts`](src/finance/dispute-match.ts), [`src/mozaik/runtime.ts`](src/mozaik/runtime.ts)):** Verified matches require card last-4, explicit matching `paymentSettlementId`, no conflicting checkout suffix (short suffixes like `"2"` or suffix-only matches never verify), and amount within capture. Both `OPEN` and `CLOSED_LOST` verified matches freeze checkout; `CLOSED_WON` replaces the original `OPEN` record by `disputeId`.
-4. **Server-Side Approval Expiry Gate ([`src/server.ts`](src/server.ts)):** Completed sessions remain retained in memory so post-run disputes or corrections still bump `epoch` and invalidate readiness. `POST /api/sessions/:id/approve` rejects stale epochs (`APPROVAL_EXPIRED_STALE_EPOCH`) and held/frozen verdicts (`VERDICT_NOT_APPROVABLE`) with **HTTP 409 Conflict**. Every checkout starts `PENDING` until an operator explicitly signs off.
+1. **Pre-Clearance Line-Level Money Reconciliation ([`src/finance/ledger.ts`](src/finance/ledger.ts), [`src/engine/run-case.ts`](src/engine/run-case.ts)):** Deduplicates settlements by `settlementId` (failing closed on duplicate IDs), enforces `ticket.requestedRefundKsh === draft.refundAmountKsh`, caps refunds at the verified returned order line's refundable amount, validates draft seller deductions both when a refund has posted and when no refund has posted yet (`0` unapplied or exact match), and explicitly reports `pendingRefundKsh` when clearing an unposted refund.
+2. **Replay-Safe Evidence & Terminal Disputes ([`src/mozaik/runtime.ts`](src/mozaik/runtime.ts), [`src/finance/dispute-match.ts`](src/finance/dispute-match.ts)):** Ignores redelivered or superseded warehouse notes (e.g., `WH-404-V1` after `WH-404-V2`) and out-of-order timestamps without advancing `epoch`. Dispute closures must match the original dispute's payment identity (`cardLast4`, `paymentSettlementId`, `pspReferenceSuffix`, `amountKsh`); `CLOSED_LOST`, `CLOSED_WON`, and `WITHDRAWN` are terminal (delayed `OPEN` or older `CLOSED_WON` replays are rejected).
+3. **Strict Sentinel & Proposal Validation ([`src/mozaik/interception.ts`](src/mozaik/interception.ts)):** Rejects blank/wrong `checkoutId`, `LOW` confidence, cross-seller `verifiedLineId`, stale `evidenceNoteId`, fabricated `citedSourceIds`, invalid seller IDs (zero draft fallback), wrong amounts, future epochs, duplicate same-epoch proposals (`DUPLICATE_PROPOSAL_BLOCKED`), and Sentinel timeouts without infinite spin.
+4. **Server-Side Approval Expiry Gate ([`src/server.ts`](src/server.ts)):** Completed single-checkout sessions stay retained in memory (reversible in-memory demo state; no authentication or database persistence). Post-run webhooks bump `epoch`, invalidate prior approvals, and immediately refresh the UI verdict, ledger, and gate. `POST /api/sessions/:id/approve` returns **HTTP 409 Conflict** (`APPROVAL_EXPIRED_STALE_EPOCH` or `VERDICT_NOT_APPROVABLE`) on stale epochs or held/frozen verdicts.
 
 ---
 
 ## 3. Quickstart & Reproducibility
 
-Requires **Node.js 20+** (verified on Node 22 & Node 26). No API key is required for full deterministic verification.
+Requires **Node.js 20+** (verified on Node 22 & Node 26). No API key is required for full deterministic verification. All npm runtime scripts invoke `node --import tsx` directly to avoid standalone `tsx` IPC errors.
 
 ```bash
 git clone https://github.com/Grolds-Code/refund-guard.git
@@ -79,18 +82,17 @@ cd refund-guard
 npm ci
 ```
 
-### Portable Commands (Recommended First)
-Using Node's `--import tsx` loader avoids IPC pipe issues that the standalone `tsx` wrapper can hit in restricted environments:
+### Verification & Local Run Commands
 
 ```bash
 npm run typecheck                             # Strict TypeScript check (0 errors)
-npm test                                      # 23 automated tests (Vitest)
-node --import tsx src/compare.ts              # 3-way benchmark (scored on verdict, seller & exact payouts)
-node --import tsx src/server.ts               # Interactive UI (desktop & mobile) on http://localhost:3000
-node --import tsx src/cli.ts                  # Run all 5 scenarios in terminal
+npm test                                      # 27 automated Vitest tests
+npm run compare                               # 3-way benchmark (scored on verdict, seller & exact payouts)
+npm start                                     # Interactive UI (desktop & mobile) on http://localhost:3000
+npm run cli                                   # Run all 5 scenarios in terminal
 ```
 
-Standard npm script aliases (`npm start`, `npm run compare`, `npm run cli`, `npm run trace:live`) are also defined in `package.json`.
+*(Direct portable invocations such as `node --import tsx src/server.ts` and `node --import tsx src/compare.ts` are identical to the npm scripts above.)*
 
 ### Running With a Real LLM Provider
 Copy `.env.example` to `.env` and supply any one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`:
@@ -101,7 +103,7 @@ REFUND_GUARD_MODE=live
 REFUND_GUARD_MODEL=gpt-4o-mini
 ```
 
-Capture a live post-acceptance late-correction expiry trace (real LLM accepts Seller B on epoch 1, `WH-404-V2` expires epoch 1, both agents revalidate to Seller A on epoch 2 with duplicate-proposal blocking enforced):
+Capture a live post-acceptance expiry trace:
 
 ```bash
 node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance
@@ -111,42 +113,41 @@ node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acce
 
 ## 4. Verified Live OpenAI Run (`traces/live-run-trace.json`)
 
-The committed trace at [`traces/live-run-trace.json`](traces/live-run-trace.json) was captured on **27 November 2026** against live OpenAI **`gpt-4o-mini`** (`node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance`), proving concurrent execution, awaited interception pauses, post-acceptance expiration of an epoch-1 approval, and zero duplicate acceptances:
+The committed trace at [`traces/live-run-trace.json`](traces/live-run-trace.json) was captured on **27 November 2026** against live OpenAI **`gpt-4o-mini`** using `node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance` (1 recorded run; the harness injects `WH-404-V2` immediately upon epoch-1 acceptance, using the earlier `WH-404-V1` text prior to tightening `WH-404-V1` to an explicit physical bench inspection):
 
 | Timestamp | Epoch | Actor | Observed Event |
 | :--- | :---: | :--- | :--- |
 | `+19ms` / `+22ms` | 1 | `RefundDeskAgent` & `DisputeFulfillmentSentinel` | Both live `gpt-4o-mini` loops start concurrently on `CHK-402` (`DRF-404` / `WH-404-V1`). |
 | `+2321ms` | 1 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-B, epoch=1)` for **853ms** while awaiting Sentinel. |
 | `+3174ms` -> `+3175ms` | 1 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-B (LINE-402-B, WH-404-V1)`; gate clears and epoch 1 accepts `SELLER-B` once. |
-| `+3175ms` | 2 | `WarehouseFeed` -> `RefundGuardState` | Late QC note `WH-404-V2` arrives (`epoch 1 -> 2`), fires `readiness.invalidated`, moves epoch-1 `SELLER-B` into `supersededProposals`, and spawns concurrent epoch-2 loops (`+3175ms` / `+3177ms`). |
-| `+4623ms` | 2 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-A, epoch=2)` for **1,239ms** while awaiting Sentinel's epoch-2 audit. |
+| `+3175ms` | 2 | `WarehouseFeed` (harness hook) -> `RefundGuardState` | Harness injects `WH-404-V2` on `proposal.accepted` (`epoch 1 -> 2`), fires `readiness.invalidated`, moves epoch-1 `SELLER-B` into `supersededProposals`, and spawns concurrent epoch-2 loops (`+3175ms` / `+3177ms`). |
+| `+4623ms` | 2 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-A, epoch=2)` for **1,239ms** while awaiting Sentinel's epoch-2 audit. *(Note: `RefundDeskAgent` does not see warehouse notes in its prompt; clearance occurs only after Sentinel publishes `WH-404-V2` at `+5862ms`.)* |
 | `+5862ms` | 2 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-A (LINE-402-A, WH-404-V2)`; gate verifies reconciliation & fields and accepts `SELLER-A` once (`CORRECTED_READY_FOR_APPROVAL`). |
 
 **Observed checks (reported without omission):**
-- `noDuplicateAcceptInAnyEpoch: true` (each epoch accepted exactly once; duplicate-proposal blocking enforced by gate + tool).
 - `expiredPriorAcceptance: true` (`supersededProposalCount: 1`, `SELLER-B` at epoch 1 superseded by `SELLER-A` at epoch 2).
 - `reconciliationMatched: true` (`A: KSh 50,000 / B: KSh 40,000`, total `KSh 90,000`).
-- `concurrentOverlapVerified: true` (`RefundDesk [19ms..5068ms]` overlapped `DisputeFulfillmentSentinel [22ms..4735ms]` for `4,713ms`).
-- `wrongProposalBlocked: false` (`interceptions: []`) in this specific run because on epoch-2 revalidation `gpt-4o-mini` proposed `SELLER-A` directly while the gate paused both epochs awaiting Sentinel; blocking and rewriting a wrong-seller or stale-epoch tool call is covered deterministically by `Case 2`, `Case 4`, and `Audit Fix 4A-4B` in `npm test`.
+- `concurrentOverlapVerified: true` (`RefundDesk [19ms..5068ms]` overlapped `DisputeFulfillmentSentinel [22ms..4735ms]` for `4,713ms` on epoch 1, including awaited gate wait time).
+- `wrongProposalBlocked: false` (`interceptions: []`) and no duplicate proposal was attempted by `gpt-4o-mini` in this run; wrong-seller/stale-epoch rewrites and `DUPLICATE_PROPOSAL_BLOCKED` enforcement are verified deterministically in `npm test` (`Case 2`, `Case 4`, `Audit Fix 4A-4B`).
 
 ---
 
 ## 5. Multi-Checkout Black Friday Batch Desk (`BATCH-BF-2026-01`)
 
-Switch to **Black Friday Batch Desk (4 Checkouts)** in the UI (or call `GET /api/batch`) to execute **4 concurrent checkout reviews** across 8 Kenyan sellers (each checkout runs 2 parallel Mozaik agent loops with measured overlap inside that checkout). Every checkout starts as **`PENDING`** until an operator clicks Approve/Hold/Reject, and the `Approve` button is disabled on held or frozen rows:
+Switch to **Black Friday Batch Desk (4 Checkouts)** in the UI (or call `GET /api/batch`) to execute **4 concurrent checkout reviews** across 8 Kenyan sellers (each checkout runs 2 parallel Mozaik agent loops with measured overlap inside that checkout). Every row starts `PENDING`, held/frozen rows have `Approve` disabled, and Batch Desk triage buttons are explicitly labeled as **local preview state** (server-side HTTP 409 approval enforcement lives on single-checkout sessions via `POST /api/sessions/:id/approve`):
 
-| Checkout | Sellers | Case Type | Expected Verdict | Eligible for Approval | Supported Release | Reserve Held |
+| Checkout | Sellers | Case Type | Expected Verdict | Eligible | Supported Release | Reserve Held |
 | :--- | :--- | :--- | :--- | :---: | ---: | ---: |
-| `CHK-402` | Nairobi Streetwear Co. / Rift Valley Footwear | Mid-flight QC warehouse correction (`WH-404-V1` -> `WH-404-V2`) | `CORRECTED_READY_FOR_APPROVAL` | Yes | KSh 90,000 | KSh 0 |
+| `CHK-402` | Nairobi Streetwear Co. / Rift Valley Footwear | Mid-flight QC physical re-inspection (`WH-404-V1` -> `WH-404-V2`) | `CORRECTED_READY_FOR_APPROVAL` | Yes | KSh 90,000 | KSh 0 |
 | `CHK-518` | Kilimani Audio Ltd / Mombasa Tech Gear | Clean verified electronics return (`AUD-PRO-01`) | `READY_FOR_HUMAN_APPROVAL` | Yes | KSh 95,000 | KSh 0 |
 | `CHK-629` | Eldoret Homeware / Kisumu Ceramics Studio | Missing physical return parcel (`WH-629`) | `HOLD_MISSING_EVIDENCE` | No | KSh 40,000 | KSh 8,000 |
 | `CHK-741` | Naivasha Coffee Roasters / Nakuru Leathercraft | Active linked PSP dispute (`DSP-741`, Visa 13.3, card `7784`, `STL-PAY-741`) | `FROZEN_DISPUTE_COLLISION` | No | KSh 78,000 | KSh 12,000 |
 
 ---
 
-## 6. Three-Way Benchmark (`node --import tsx src/compare.ts`)
+## 6. Three-Way Benchmark (`npm run compare`)
 
-`src/compare.ts` scores every run on **verdict, debited seller, AND exact supported seller payout amounts** (without summing artificial penalties across synthetic fixtures). The comparison between `3/5` and `5/5` measures **static `t=0` snapshot review against live mid-flight evidence interception** (it does not isolate agent count alone, since a sequential agent that re-reads state before committing could also observe updated evidence; RefundGuard uses concurrent Mozaik loops + pre-execution interception to react while work is in flight):
+`src/compare.ts` scores every run on **verdict, debited seller, AND exact supported seller payout amounts** (no artificial penalty sums). The comparison between `3/5` and `5/5` measures **static `t=0` snapshot review against live mid-flight evidence interception** (not agent count alone):
 
 | Scenario | Ticket+Draft Baseline *(no warehouse/dispute input)* | `t=0` Snapshot Baseline *(same initial ticket, draft, warehouse, dispute & policy)* | RefundGuard *(2 concurrent Mozaik agents + `InterceptionGate`)* | Overlap |
 | :--- | :--- | :--- | :--- | :---: |
@@ -159,27 +160,27 @@ Switch to **Black Friday Batch Desk (4 Checkouts)** in the UI (or call `GET /api
 
 ---
 
-## 7. Automated Test Matrix (`npm test`: 23 / 23 Passing)
+## 7. Automated Test Matrix (`npm test`: 27 / 27 Passing)
 
 | Group | Tests | What They Verify |
 | :--- | :---: | :--- |
-| Core Scenarios (Cases 1-5 + Interactive Flip) | 6 | Clean pass, zero-sum Seller B -> A correction, fail-closed missing evidence, mid-flight epoch 1 -> 2 correction, mid-flight Visa 13.3 dispute freeze, live warehouse note edit flip. |
-| Post-Acceptance Invalidation (`Regression 1A-1C`) | 3 | Event-driven warehouse correction & chargeback on `proposal.accepted` invalidate epoch 1 (`readiness.invalidated`), hold non-zero reserve, and return `PENDING_REVALIDATION` if revalidation cannot finish. |
-| Money Reconciliation (`Audit Fix 1`) | 1 | KSh 15,000 draft refund against KSh 10,000 posted refund fails closed with `HOLD_RECONCILIATION_MISMATCH` (`reconciliationMatched: false`). |
-| Dispute Identity, Closure & Reserve (`Regression 2A-2B`, `Audit Fix 3A-3D`) | 6 | Unrelated dispute ignored; ambiguous dispute asks verification; conflicting explicit `paymentSettlementId`, 1-char suffix `"2"`, and suffix-only disputes never verify; `CLOSED_LOST` blocks double-refund; `CLOSED_WON` replaces original `OPEN` record by `disputeId`; unverified frozen dispute holds both checkout lines without draft fallback. |
-| Direct Gate Strictness & Idempotency (`Audit Fix 4A-4B`) | 2 | Blocks duplicate proposals in the same epoch (`DUPLICATE_PROPOSAL_BLOCKED`); rejects wrong checkout, `LOW` confidence, cross-seller line ID, invented note ID, invalid seller `SELLER-Z`, wrong amount, future epoch `99`, and Sentinel timeout without infinite spin. |
-| Mock Rule-Based Parser Edge Cases (`Audit Fix 5`) | 1 | Verifies negation (`"did not receive"`), tentative notes (`"tentative... Pending bench open"`), `"Both items received"`, `"Nothing missing"`, and `"customer kept the jacket"`. |
-| Baseline, Batch Desk, Live Interrupt & HTTP 409 Gate | 4 | Snapshot vs. live comparison, 4-checkout batch (all start `PENDING`, held/frozen marked `approvable: false`), `onSessionReady` live interrupt, and real HTTP server tests asserting `409 Conflict` on stale post-run epoch and held verdicts plus `200 OK` on current eligible approvals. |
+| Core Scenarios (Cases 1-5 + Interactive Flip) | 6 | Clean pass, zero-sum Seller B -> A correction, fail-closed missing evidence, mid-flight epoch 1 -> 2 physical re-inspection, mid-flight Visa 13.3 dispute freeze, live warehouse note edit flip. |
+| Post-Acceptance Invalidation (`Regression 1A-1C`) | 3 | Event-driven warehouse correction & chargeback on `proposal.accepted` invalidate epoch 1 (`readiness.invalidated`), hold non-zero reserve, and fail closed to `PENDING_REVALIDATION` if revalidation cannot finish. |
+| Money Reconciliation & Line Caps (`Audit Fix 1`, `Round 2 Fix 3`) | 2 | Draft vs. posted mismatch, refund exceeding verified line cap (15k > 10k), duplicate `STL-REF-402` record, invalid unposted draft deductions (A:55k/B:40k), ticket vs. draft/posted mismatch, explicit `pendingRefundKsh` on unposted approvals, and partial (5k) vs. checkout-wide (20k) dispute reserve sizing. |
+| Dispute Identity, Closure & Replay Safety (`Regression 2A-2B`, `Audit Fix 3A-3D`, `Round 2 Fix 1-2`) | 8 | Unrelated/ambiguous matching; conflicting `paymentSettlementId`, 1-char suffix `"2"`, and suffix-only never verify; `CLOSED_LOST` freezes and is terminal; mismatched `CLOSED_WON` rejected; valid `OPEN -> CLOSED_WON` clears freeze and rejects delayed `OPEN` replay; redelivered superseded `WH-404-V1` after `WH-404-V2` ignored without advancing epoch; unverified frozen dispute holds both sellers without draft fallback. |
+| Direct Gate Strictness & Idempotency (`Audit Fix 4A-4B`) | 2 | Blocks duplicate same-epoch proposals (`DUPLICATE_PROPOSAL_BLOCKED`); rejects wrong `checkoutId`, `LOW` confidence, cross-seller line ID, stale note ID, invalid seller `SELLER-Z`, wrong amount, future epoch `99`, and Sentinel timeout without infinite spin. |
+| Physical Receipt, Non-Return Parser & Gate Citations (`Audit Fix 5`, `Round 2 Fix 4`) | 2 | Verifies negation, tentative/pending notes, `"Both items received"`, `"Nothing missing"`, `"customer kept"`, exterior barcode-only / contents never checked, `"wasn't in the box"`, `"could not locate"`, `"still in transit"`, `"hub has not seen it"`, `"expected tomorrow"`, wrong-brand/wrong-item notes, plus gate rejection of blank `checkoutId` and fabricated `INVENTED-1` citations. |
+| Baseline, Batch Desk, Live Interrupt & HTTP 409 Gate | 4 | Snapshot vs. live comparison, 4-checkout batch (all start `PENDING`, held/frozen non-approvable), `onSessionReady` live interrupt, and real HTTP server tests asserting `409 Conflict` on stale post-run epoch and held verdicts plus `200 OK` on current eligible approvals. |
 
 ---
 
 ## 8. Financial Grounding & Explicit Hold Policy
 
-Every shilling in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed in integer KSh and cites exact immutable source record IDs (`DRF-*`, `TKT-*`, `STL-*`, `LINE-*`, `WH-*`, `DSP-*`). RefundGuard reports `requestedRefundKsh`, `blockedUnsafeRefundKsh`, `totalWithheldFromGrossKsh`, and `heldReserveKsh` separately:
+Every shilling in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed in integer KSh from deduplicated immutable source records (`DRF-*`, `TKT-*`, `STL-*`, `LINE-*`, `WH-*`, `DSP-*`). RefundGuard reports `requestedRefundKsh`, `pendingRefundKsh`, `blockedUnsafeRefundKsh`, `totalWithheldFromGrossKsh`, and `heldReserveKsh` separately:
 
-- **Approved verdicts (`READY_FOR_HUMAN_APPROVAL`, `CORRECTED_READY_FOR_APPROVAL`):** Release full reconciled net settlement (`reconciliationMatched === true`); deduct refund only from the verified seller.
-- **Dispute collision (`FROZEN_DISPUTE_COLLISION`) with HIGH-confidence verified returned seller:** Block the unsafe refund proposal (`requestedRefundKsh`) and hold the verified disputed seller's checkout line (plus any already-posted refund against that seller so active/lost dispute reserves never collapse to KSh 0), keeping the undisputed seller clear.
-- **Unresolved attribution or mismatch (`HOLD_MISSING_EVIDENCE`, `HOLD_RECONCILIATION_MISMATCH`, `VERIFY_DISPUTE_MATCH`, `PENDING_REVALIDATION`, or `FROZEN_DISPUTE_COLLISION` without a verified returned seller):** Withhold both checkout lines from gross seller payouts (`totalWithheldFromGrossKsh`) rather than guessing from the untrusted draft. `heldReserveKsh` reports the exact cash reserve held out of `netBatchTotalKsh` (net bank settlement after any posted PSP refund).
+- **Approved verdicts (`READY_FOR_HUMAN_APPROVAL`, `CORRECTED_READY_FOR_APPROVAL`):** Release full reconciled net settlement (`reconciliationMatched === true`); deduct refund only from the verified seller (explicitly labeling `pendingRefundKsh` when no processor refund has posted yet).
+- **Dispute collision (`FROZEN_DISPUTE_COLLISION`) with HIGH-confidence verified returned seller and single-line dispute amount:** Block the unsafe refund proposal (`requestedRefundKsh`) and hold the exact disputed amount (plus any already-posted refund against that seller), keeping the undisputed seller clear.
+- **Checkout-wide dispute (`dispute.amountKsh > sellerLineAmount`) or unresolved attribution/mismatch (`HOLD_MISSING_EVIDENCE`, `HOLD_RECONCILIATION_MISMATCH`, `VERIFY_DISPUTE_MATCH`, `PENDING_REVALIDATION`, or `FROZEN_DISPUTE_COLLISION` without a verified returned seller):** Withhold both checkout lines from gross seller payouts (`totalWithheldFromGrossKsh`) rather than guessing from the untrusted draft. `heldReserveKsh` reports the exact cash reserve held out of `netBatchTotalKsh`.
 
 ---
 
@@ -190,10 +191,10 @@ Every shilling in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed i
 | `/` | `GET` | Responsive obsidian dark UI (desktop, tablet, and mobile). |
 | `/api/health` | `GET` | Runtime status, active mode (`mock` or `live`), model name, loaded counts, and retained session count. |
 | `/api/scenarios` | `GET` | All 5 single-checkout scenarios and 4 Black Friday batch checkouts. |
-| `/api/run` | `POST` | Runs a checkout concurrently on Mozaik, streaming `session`, `timeline`, and `report` via SSE, and retains the session for post-run webhooks and approval checks. |
-| `/api/sessions/:id/inject` | `POST` | Injects a mid-run or post-run warehouse correction or dispute webhook into a session, bumping `epoch` and invalidating stale approvals. |
-| `/api/sessions/:id/approve` | `POST` | Server-side approval gate enforcing current-epoch match and verdict eligibility; returns **HTTP 409 Conflict** (`APPROVAL_EXPIRED_STALE_EPOCH` or `VERDICT_NOT_APPROVABLE`) or **HTTP 200 OK**. |
-| `/api/batch` | `GET` | Runs 4 concurrent checkout reviews (2 overlapping Mozaik loops inside each checkout); all decisions start `PENDING`. |
+| `/api/run` | `POST` | Runs a checkout concurrently on Mozaik, streaming `session`, `timeline`, and `report` via SSE, and retains the session in memory for post-run webhooks and approval checks. |
+| `/api/sessions/:id/inject` | `POST` | Injects a mid-run or post-run warehouse correction or dispute webhook into a session, bumping `epoch`, invalidating stale approvals, and returning the refreshed `report` snapshot so the UI stays consistent. |
+| `/api/sessions/:id/approve` | `POST` | In-memory server-side approval gate enforcing current-epoch match and verdict eligibility; returns **HTTP 409 Conflict** (`APPROVAL_EXPIRED_STALE_EPOCH` or `VERDICT_NOT_APPROVABLE`) or **HTTP 200 OK**. |
+| `/api/batch` | `GET` | Runs 4 concurrent checkout reviews (2 overlapping Mozaik loops inside each checkout); all rows start `PENDING` for local triage preview. |
 | `/api/compare` | `GET` | Executes the 5-case three-way benchmark (`Ticket+Draft` vs. `t=0 Snapshot` vs. `RefundGuard`). |
 
 ---
@@ -205,30 +206,30 @@ src/
   finance/
     types.ts           # Immutable source record, dispute match, verdict & ledger types
     dispute-match.ts   # Deterministic payment-to-dispute linkage verifier (OPEN & CLOSED_LOST)
-    ledger.ts          # Pure integer-KSh calculator, money reconciliation & hold policy
-    fixtures.ts        # 5 core scenarios (Visa 13.3 codes) + unrelated/ambiguous dispute fixtures
+    ledger.ts          # Pure integer-KSh calculator, line-level reconciliation & dispute reserves
+    fixtures.ts        # 5 core scenarios (physical inspection notes & Visa 13.3 codes) + dispute fixtures
     batch.ts           # 4-checkout, 8-seller Black Friday batch fixtures
   mozaik/
-    runtime.ts         # RefundGuardState (RuntimeState), epoch, dispute upsert & invalidation
+    runtime.ts         # RefundGuardState (RuntimeState), replay-safe supersession & terminal disputes
     interception.ts    # Awaited InterceptionHandler on `propose_refund` (idempotent & strict)
     runner.ts          # Dual live LLM / rule-based deterministic MockInferenceRunner config
     agents/
-      refund-desk.ts   # Agent 1: ticket + policy -> propose_refund (+ revalidation loop)
-      sentinel.ts      # Agent 2: warehouse notes + dispute links -> publish_sentinel_finding
-      observer.ts      # AuditObserver measuring concurrent overlap & SemanticEvents
+      refund-desk.ts   # Agent 1 (evidence-light proposer): ticket + policy + draft -> propose_refund
+      sentinel.ts      # Agent 2 (concurrent auditor): physical notes + disputes -> publish_sentinel_finding
+      observer.ts      # AuditObserver measuring concurrent overlap & tagging stale loop completions
   engine/
     run-case.ts        # Concurrent Mozaik runner + live snapshot handle + readiness invariant
-    run-batch.ts       # Concurrent 4-checkout batch runner (all decisions start PENDING)
+    run-batch.ts       # Concurrent 4-checkout batch runner (all rows start PENDING)
     baseline.ts        # Ticket-and-Draft Baseline + static t=0 Snapshot Baseline
-  cli.ts               # Terminal runner
-  compare.ts           # Payout-verified three-way benchmark
-  live-trace.ts        # Real LLM verification harness (default: post-acceptance expiry on Case 4)
+  cli.ts               # Terminal runner (`npm run cli`)
+  compare.ts           # Payout-verified three-way benchmark (`npm run compare`)
+  live-trace.ts        # Real LLM verification harness (`npm run trace:live`)
   server.ts            # Node HTTP + SSE server with retained sessions and 409 /approve gate
 public/
-  index.html           # Responsive obsidian dark UI with server-enforced approvals
+  index.html           # Responsive obsidian dark UI with post-run refresh & Try Stale Approval (409)
 traces/
-  live-run-trace.json  # Live OpenAI gpt-4o-mini concurrent trace
+  live-run-trace.json  # Live OpenAI gpt-4o-mini post-acceptance expiry trace
 tests/
-  refund-guard.test.ts # 23 Vitest tests (`npm test`)
+  refund-guard.test.ts # 27 Vitest tests (`npm test`)
 LICENSE                # MIT License
 ```

@@ -206,6 +206,7 @@ export interface GroundedLedgerResult {
   readonly batchGrossKsh: number;
   readonly confirmedRefundKsh: number;
   readonly requestedRefundKsh: number;
+  readonly pendingRefundKsh: number;
   readonly netBatchTotalKsh: number;
   readonly draftTotalKsh: number;
   readonly supportedTotalKsh: number;

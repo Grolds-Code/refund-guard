@@ -58,10 +58,15 @@ export function createAuditObserver(
             if (openWindow) {
               openWindow.endedAtMs = Date.now();
             }
+            const isStale = Boolean(openWindow && openWindow.epoch < state.epoch);
+            const prefix = isStale
+              ? `[STALE epoch ${openWindow!.epoch} superseded by epoch ${state.epoch}] `
+              : "";
             state.recordEvent(
-              "agent.completed",
+              isStale ? "agent.completed_stale" : "agent.completed",
               "RefundDeskAgent",
-              text.slice(0, 220) || "RefundDeskAgent loop completed.",
+              `${prefix}${text.slice(0, 220) || "RefundDeskAgent loop completed."}`,
+              isStale ? { staleLoopEpoch: openWindow!.epoch, currentEpoch: state.epoch } : undefined,
             );
             state.notifyRefundDeskLoopSettled();
           } else if (event.producerId === sentinelId) {
@@ -69,10 +74,15 @@ export function createAuditObserver(
             if (openWindow) {
               openWindow.endedAtMs = Date.now();
             }
+            const isStale = Boolean(openWindow && openWindow.epoch < state.epoch);
+            const prefix = isStale
+              ? `[STALE epoch ${openWindow!.epoch} superseded by epoch ${state.epoch}] `
+              : "";
             state.recordEvent(
-              "agent.completed",
+              isStale ? "agent.completed_stale" : "agent.completed",
               "DisputeFulfillmentSentinel",
-              text.slice(0, 220) || "DisputeFulfillmentSentinel loop completed.",
+              `${prefix}${text.slice(0, 220) || "DisputeFulfillmentSentinel loop completed."}`,
+              isStale ? { staleLoopEpoch: openWindow!.epoch, currentEpoch: state.epoch } : undefined,
             );
             state.notifySentinelLoopSettled();
           }

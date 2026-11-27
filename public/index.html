@@ -979,6 +979,7 @@
               <span id="operatorStatus" class="status-tag">Operator decision: pending</span>
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
                 <button id="approveReleaseBtn" type="button" class="btn btn-ghost btn-sm op-btn" data-op="APPROVED_FOR_RELEASE" disabled>Approve Release</button>
+                <button id="staleApproveBtn" type="button" class="btn btn-interrupt btn-sm hidden">Try Stale Approval (Expect 409)</button>
                 <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="HELD_IN_RESERVE">Hold Reserve</button>
                 <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="REJECTED">Reject Draft</button>
               </div>
@@ -1052,7 +1053,7 @@
     <div class="scenario-strip">
       <div>
         <div style="font-size:15px; font-weight:600;">Black Friday Settlement Batch: BATCH-BF-2026-01</div>
-        <div style="font-size:12.5px; color:var(--ink-2);">4 concurrent checkout reviews (8 Kenyan sellers; 2 overlapping Mozaik agent loops inside each checkout). All payouts start pending human sign-off.</div>
+        <div style="font-size:12.5px; color:var(--ink-2);">4 concurrent checkout reviews (8 Kenyan sellers; 2 overlapping Mozaik agent loops inside each checkout). Triage buttons below are local preview state, not server release approvals.</div>
       </div>
       <button id="runBatchBtn" class="btn btn-primary">Run 4-Checkout Batch Audit</button>
     </div>
@@ -1064,9 +1065,9 @@
         <div id="batchOverlapSub" class="kpi-sub">Click Run to measure concurrent overlap within each checkout.</div>
       </div>
       <div class="surface kpi">
-        <span class="eyebrow">Operator Approved Release</span>
+        <span class="eyebrow">Local Triage Release Preview</span>
         <div id="batchApprovedVal" class="kpi-val mono">KSh 0</div>
-        <div id="batchApprovedSub" class="kpi-sub">Starts at KSh 0; only eligible verdicts can be approved.</div>
+        <div id="batchApprovedSub" class="kpi-sub">Local preview only (not server release approval); held/frozen rows disabled.</div>
       </div>
       <div class="surface kpi">
         <span class="eyebrow">Held in Reserve / Blocked</span>
@@ -1082,7 +1083,7 @@
 
     <section class="surface">
       <div class="card-head">
-        <h2 class="card-title">Checkout Release Queue &amp; Operator Sign-Off</h2>
+        <h2 class="card-title">Checkout Release Queue (Local Triage Preview)</h2>
         <span id="batchStatusTag" class="status-tag">idle</span>
       </div>
       <div class="card-body">
@@ -1094,7 +1095,7 @@
                 <th>Verdict</th>
                 <th>Supported Release</th>
                 <th>Reserve Held</th>
-                <th>Operator Decision</th>
+                <th>Local Triage (Preview)</th>
                 <th>Inspect</th>
               </tr>
             </thead>
@@ -1122,6 +1123,7 @@
       events: [],
       activeSessionId: null,
       lastBundle: null,
+      staleApprovalEpoch: null,
       batchSummary: null,
       batchDecisions: {},
     };
@@ -1161,6 +1163,7 @@
       holdPolicyLine: document.getElementById("holdPolicyLine"),
       operatorStatus: document.getElementById("operatorStatus"),
       approveReleaseBtn: document.getElementById("approveReleaseBtn"),
+      staleApproveBtn: document.getElementById("staleApproveBtn"),
       operatorNotice: document.getElementById("operatorNotice"),
       sourceCards: document.getElementById("sourceCards"),
       gateBox: document.getElementById("gateBox"),
@@ -1426,10 +1429,13 @@
       }
     }
 
-    async function submitOperatorDecision(decision) {
+    async function submitOperatorDecision(decision, overrideEpoch = null) {
       if (!state.lastBundle || !state.activeSessionId) return;
       const report = state.lastBundle.report;
+      const targetEpoch = overrideEpoch !== null ? overrideEpoch : report.finalEpoch;
+
       if (
+        overrideEpoch === null &&
         decision === "APPROVED_FOR_RELEASE" &&
         !isApprovableVerdict(report.verdict, report.ledger.reconciliationMatched)
       ) {
@@ -1444,7 +1450,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          epoch: report.finalEpoch,
+          epoch: targetEpoch,
           decision,
         }),
       });
@@ -1463,14 +1469,18 @@
       renderOperatorDecisionBadge(data.decision);
     }
 
-    function renderReport(payload) {
+    function renderReport(payload, opts = {}) {
       const { report, baseline, sourceRecords } = payload;
       state.lastBundle = payload;
       if (payload.sessionId) {
         state.activeSessionId = payload.sessionId;
       }
       els.downloadBtn.disabled = false;
-      showOperatorNotice("");
+      if (!opts.preserveStaleEpoch) {
+        state.staleApprovalEpoch = null;
+        els.staleApproveBtn.classList.add("hidden");
+        showOperatorNotice("");
+      }
 
       const approvable = isApprovableVerdict(
         report.verdict,
@@ -1497,7 +1507,7 @@
         humanLabel = "Verify ambiguous dispute match";
       } else if (report.verdict === "PENDING_REVALIDATION") {
         tone = "warn";
-        humanLabel = "Pending revalidation on new epoch";
+        humanLabel = "Expired: pending revalidation on new epoch";
       }
 
       els.verdictTag.className = `status-tag ${tone}`;
@@ -1517,6 +1527,9 @@
       } else if (report.ledger.heldReserveKsh > 0) {
         els.protectionVal.textContent = `${fmtKsh(report.ledger.heldReserveKsh)} reserve held`;
         els.protectionSub.textContent = `Requested refund: ${fmtKsh(report.ledger.requestedRefundKsh)}. ${fmtKsh(report.ledger.totalWithheldFromGrossKsh)} withheld from gross lines.`;
+      } else if (report.ledger.pendingRefundKsh > 0) {
+        els.protectionVal.textContent = fmtKsh(report.ledger.supportedTotalKsh);
+        els.protectionSub.textContent = `Includes ${fmtKsh(report.ledger.pendingRefundKsh)} pending refund deduction against ${fmtKsh(report.ledger.netBatchTotalKsh)} posted net.`;
       } else {
         els.protectionVal.textContent = fmtKsh(report.ledger.supportedTotalKsh);
         els.protectionSub.textContent = "Verified allocation reconciles with posted settlement totals.";
@@ -1532,7 +1545,7 @@
       renderGantt(report);
       renderSourceCards(sourceRecords);
 
-      // Every verdict starts pending until a human operator explicitly approves, holds, or rejects.
+      // Every verdict starts pending (and clears any prior green approval badge on refresh).
       renderOperatorDecisionBadge("PENDING");
 
       const rowsHtml = report.ledger.lines
@@ -1590,17 +1603,31 @@
       `;
 
       if (report.interceptions.length === 0) {
-        els.gateBox.innerHTML = `
-          <div class="gate-item">
-            <div class="gate-top">
-              <span class="status-tag ok"><span class="dot ok"></span>CLEARED</span>
-              <span class="eyebrow">epoch ${report.finalEpoch}</span>
+        if (approvable) {
+          els.gateBox.innerHTML = `
+            <div class="gate-item">
+              <div class="gate-top">
+                <span class="status-tag ok"><span class="dot ok"></span>CLEARED</span>
+                <span class="eyebrow">epoch ${report.finalEpoch}</span>
+              </div>
+              <div class="gate-desc">
+                RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with reconciled totals and zero blocking disputes.
+              </div>
             </div>
-            <div class="gate-desc">
-              RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with reconciled totals and zero blocking disputes.
+          `;
+        } else {
+          els.gateBox.innerHTML = `
+            <div class="gate-item">
+              <div class="gate-top">
+                <span class="status-tag danger"><span class="dot danger"></span>EXPIRED / BLOCKED</span>
+                <span class="eyebrow">epoch ${report.finalEpoch}</span>
+              </div>
+              <div class="gate-desc">
+                Prior clearance was invalidated by newer evidence (${escapeHtml(report.verdict)}). Release approval is blocked until re-run on epoch ${report.finalEpoch}.
+              </div>
             </div>
-          </div>
-        `;
+          `;
+        }
       } else {
         els.gateBox.innerHTML = report.interceptions
           .map(
@@ -1626,17 +1653,32 @@
 
     async function sendLiveInterrupt(kind, targetSellerId) {
       if (!state.activeSessionId) return;
+      const priorEpoch = state.lastBundle?.report?.finalEpoch ?? null;
       const res = await fetch(`/api/sessions/${state.activeSessionId}/inject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind, targetSellerId }),
       });
       const data = await res.json();
-      if (res.ok && state.lastBundle) {
-        showOperatorNotice(
-          `Post-run webhook received (${data.injected}, epoch -> ${data.epoch}, verdict -> ${data.currentVerdict}). Displayed epoch ${state.lastBundle.report.finalEpoch} is now stale; clicking Approve Release will return 409 Conflict.`,
-          "warn",
-        );
+      if (res.ok && state.lastBundle && data.report) {
+        state.events = data.report.timeline || state.events;
+        renderFeed();
+        const refreshedPayload = {
+          ...state.lastBundle,
+          report: data.report,
+        };
+        if (priorEpoch !== null && data.epoch > priorEpoch) {
+          state.staleApprovalEpoch = priorEpoch;
+          renderReport(refreshedPayload, { preserveStaleEpoch: true });
+          els.staleApproveBtn.textContent = `Try Stale Approval (ep ${priorEpoch} -> Expect 409)`;
+          els.staleApproveBtn.classList.remove("hidden");
+          showOperatorNotice(
+            `Post-run webhook received (${data.injected}): epoch ${priorEpoch} -> ${data.epoch}, verdict updated to ${data.currentVerdict}. Prior approval cleared; click "Try Stale Approval" to verify HTTP 409 rejection.`,
+            "warn",
+          );
+        } else {
+          renderReport(refreshedPayload);
+        }
       }
     }
 
@@ -1644,9 +1686,11 @@
       els.runBtn.disabled = true;
       els.topRunBtn.disabled = true;
       els.approveReleaseBtn.disabled = true;
+      els.staleApproveBtn.classList.add("hidden");
       showOperatorNotice("");
       state.activeSessionId = null;
       state.lastBundle = null;
+      state.staleApprovalEpoch = null;
       state.events = [];
       renderFeed();
       els.gateBox.innerHTML = `<div class="gate-desc">Inspecting concurrent agent loops...</div>`;
@@ -1890,6 +1934,12 @@
       for (const btn of document.querySelectorAll(".op-btn")) {
         btn.addEventListener("click", () => submitOperatorDecision(btn.dataset.op));
       }
+
+      els.staleApproveBtn.addEventListener("click", () => {
+        if (state.staleApprovalEpoch !== null) {
+          submitOperatorDecision("APPROVED_FOR_RELEASE", state.staleApprovalEpoch);
+        }
+      });
 
       for (const pill of document.querySelectorAll(".filter-pill")) {
         pill.addEventListener("click", () => {

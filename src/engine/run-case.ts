@@ -24,6 +24,7 @@ import {
 
 export interface PostAcceptanceInjector {
   injectWarehouseCorrection(note: WarehouseNoteRecord): {
+    applied: boolean;
     epoch: number;
     invalidatedPriorApproval: boolean;
   };
@@ -128,6 +129,7 @@ export async function runRefundGuardCase(
       supportedDebitSellerId,
       currentEpochFinding ?? state.getMostRecentAnyEpochFinding(),
       latestRelevantDispute?.evaluation ?? state.lastDisputeEvaluation,
+      latestRelevantDispute?.chargeback.amountKsh ?? null,
     );
     const overlap = state.computeOverlapMetrics();
 
@@ -155,7 +157,10 @@ export async function runRefundGuardCase(
   let runCompleted = false;
 
   const publishWarehouseCorrection = (note: WarehouseNoteRecord) => {
-    const { epoch, invalidatedPriorApproval } = state.addWarehouseCorrection(note);
+    const { applied, epoch, invalidatedPriorApproval } = state.addWarehouseCorrection(note);
+    if (!applied) {
+      return { applied: false, epoch, invalidatedPriorApproval: false };
+    }
     if (!runCompleted) {
       runtime.sendEvent(
         SemanticEvent.create("evidence.updated", coordinator.getId(), {
@@ -167,7 +172,7 @@ export async function runRefundGuardCase(
         coordinator.getId(),
       );
     }
-    return { epoch, invalidatedPriorApproval };
+    return { applied: true, epoch, invalidatedPriorApproval };
   };
 
   const publishChargeback = (chargeback: ChargebackWebhookRecord) => {
@@ -179,7 +184,7 @@ export async function runRefundGuardCase(
         invalidatedPriorApproval: false,
       };
     }
-    const disputeClosed = res.evaluation.matchState === "INACTIVE";
+    const disputeClosed = Boolean(res.disputeClosed);
     if (!runCompleted) {
       runtime.sendEvent(
         SemanticEvent.create("evidence.updated", coordinator.getId(), {
@@ -290,10 +295,13 @@ function resolveFinalVerdictWithInvariant(
     return "VERIFY_DISPUTE_MATCH";
   }
 
-  // Deterministic money reconciliation must pass before ANY payout can be marked ready.
+  // Deterministic money reconciliation (including line-level refundable cap) must pass before clearance.
   const recon = checkMoneyReconciliation(
     state.scenario,
     state.acceptedProposal?.refundAmountKsh,
+    currentEpochFinding?.status === "VERIFIED_RETURN"
+      ? currentEpochFinding.verifiedLineId
+      : null,
   );
   if (!recon.ok) {
     return "HOLD_RECONCILIATION_MISMATCH";

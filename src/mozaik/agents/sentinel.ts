@@ -18,7 +18,7 @@ class WhenEvidenceNeedsAudit extends SituationSpecification {
 }
 
 const SENTINEL_INSTRUCTION =
-  "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and issuing-bank dispute webhooks. Flag DISPUTE_COLLISION when an OPEN or CLOSED_LOST dispute is verified against the original payment (matching card last-4, explicit paymentSettlementId, no conflicting reference, and amount within capture). Flag DISPUTE_AMBIGUOUS when signals partially overlap or conflict. Ignore unrelated, CLOSED_WON, or WITHDRAWN disputes. Otherwise determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived, contents are tentative/pending/unverified, or both items are ambiguously returned, publish status=MISSING_OR_AMBIGUOUS with confidence=LOW. Always call `publish_sentinel_finding` ONCE with the exact CURRENT_EPOCH, CHECKOUT_ID, latest WAREHOUSE_NOTE_ID, and source IDs, then reply briefly without calling the tool again.";
+  "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and issuing-bank dispute webhooks. Flag DISPUTE_COLLISION when an OPEN or CLOSED_LOST dispute is verified against the original payment (matching card last-4, explicit paymentSettlementId, no conflicting reference, and amount within capture). Flag DISPUTE_AMBIGUOUS when signals partially overlap or conflict. Ignore unrelated, CLOSED_WON, or WITHDRAWN disputes. Otherwise determine which exact seller line item physically arrived back at the warehouse: require affirmative proof of physical inspection/receipt (exterior barcode-only, label-only, manifest-only, unopened-box, in-transit, or unverified claims are NOT proof and MUST publish status=MISSING_OR_AMBIGUOUS with confidence=LOW). Always call `publish_sentinel_finding` ONCE with the exact CURRENT_EPOCH, CHECKOUT_ID, latest WAREHOUSE_NOTE_ID, and real source IDs from the prompt, then reply briefly without calling the tool again.";
 
 export function createSentinelAgent(
   runtime: RefundGuardRuntimeApi,
@@ -93,7 +93,7 @@ export function createSentinelAgent(
 
       const finding = {
         epoch: args.epoch,
-        checkoutId: args.checkoutId?.trim() || state.scenario.checkoutId,
+        checkoutId: typeof args.checkoutId === "string" ? args.checkoutId.trim() : "",
         status: args.status,
         verifiedSellerId: normalizedSeller,
         verifiedLineId: normalizedLine,

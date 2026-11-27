@@ -39,10 +39,10 @@ export function validateSentinelFindingForClearance(
       reason: `Sentinel finding epoch (${finding.epoch}) does not match current epoch (${state.epoch}).`,
     };
   }
-  if (finding.checkoutId && finding.checkoutId !== state.scenario.checkoutId) {
+  if (!finding.checkoutId || finding.checkoutId !== state.scenario.checkoutId) {
     return {
       valid: false,
-      reason: `Sentinel finding checkoutId (${finding.checkoutId}) does not match ${state.scenario.checkoutId}.`,
+      reason: `Sentinel finding checkoutId (${String(finding.checkoutId ?? "")}) does not match ${state.scenario.checkoutId}.`,
     };
   }
   if (finding.status !== "VERIFIED_RETURN") {
@@ -83,6 +83,14 @@ export function validateSentinelFindingForClearance(
     return {
       valid: false,
       reason: `Sentinel evidenceNoteId (${finding.evidenceNoteId}) does not match latest warehouse note (${latestNote.noteId}).`,
+    };
+  }
+  const knownIds = state.getKnownSourceIds();
+  const unknownCitations = finding.citedSourceIds.filter((id) => !knownIds.has(id));
+  if (unknownCitations.length > 0) {
+    return {
+      valid: false,
+      reason: `Sentinel cited unknown source ID(s): ${unknownCitations.join(", ")}.`,
     };
   }
   return { valid: true };
@@ -243,8 +251,12 @@ export class RefundInterceptionGate implements InterceptionHandler {
       return this.haltForHumanReview("VERIFY_DISPUTE_MATCH", detail, cited);
     }
 
-    // 2. Deterministic money reconciliation check on source settlements & draft
-    const sourceRecon = checkMoneyReconciliation(this.state.scenario);
+    // 2. Deterministic money reconciliation check on source settlements, draft, and verified line cap
+    const sourceRecon = checkMoneyReconciliation(
+      this.state.scenario,
+      undefined,
+      finding?.status === "VERIFIED_RETURN" ? finding.verifiedLineId : null,
+    );
     if (!sourceRecon.ok) {
       const cited = [
         this.state.scenario.draft.draftId,
