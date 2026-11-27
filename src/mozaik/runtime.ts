@@ -123,10 +123,13 @@ export class RefundGuardState extends RuntimeState {
 
   getKnownSourceIds(): Set<string> {
     const ids = new Set<string>([
+      this.scenario.checkoutId,
+      this.scenario.batchId,
       this.scenario.draft.draftId,
       this.scenario.ticket.ticketId,
       ...this.scenario.settlements.map((s) => s.settlementId),
       ...this.scenario.orderLines.map((l) => l.lineId),
+      ...this.scenario.orderLines.map((l) => l.sku),
       ...this.warehouseNotes.map((n) => n.noteId),
       ...this.chargebacks.map((c) => c.disputeId),
     ]);

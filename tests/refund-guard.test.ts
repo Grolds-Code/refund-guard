@@ -961,6 +961,37 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
       expect(next.nextStateId).toBe("model_message");
       expect(state.verdict).toBe("HOLD_MISSING_EVIDENCE");
     }
+
+    // Real source identifiers from the prompt (checkoutId + SKU) must clear cleanly
+    const validLiveCitationsState = new RefundGuardState(
+      case1,
+      "mock",
+      "refund-guard-deterministic-v1",
+    );
+    validLiveCitationsState.publishSentinelFinding({
+      epoch: 1,
+      checkoutId: case1.checkoutId,
+      status: "VERIFIED_RETURN",
+      verifiedSellerId: "SELLER-A",
+      verifiedLineId: "LINE-402-A",
+      disputeId: null,
+      evidenceNoteId: "WH-101",
+      confidence: "HIGH",
+      summary: "Verified live citation test",
+      citedSourceIds: ["CHK-402", "WH-101", "JKT-NVY-L"],
+      recordedAtMs: 5,
+    });
+    const validGate = new RefundInterceptionGate(validLiveCitationsState, 50);
+    const clearedNext = await validGate.handle(
+      makeDirectProposalTransition({
+        checkoutId: case1.checkoutId,
+        debitSellerId: "SELLER-A",
+        refundAmountKsh: 10_000,
+        epoch: 1,
+        rationale: "valid",
+      }),
+    );
+    expect(clearedNext.nextStateId).toBe("function_call");
   });
 
   // --- Final Pre-Submission Blocker Regressions (5/5) ---
