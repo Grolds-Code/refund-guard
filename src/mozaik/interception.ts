@@ -160,7 +160,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
         citedSourceIds: finding.citedSourceIds,
       });
       return this.rewriteForReplan(
-        call.callId,
+        call,
         inferenceInput,
         "SUPERSEDED_EVIDENCE",
         detail,
@@ -183,7 +183,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
         citedSourceIds: finding.citedSourceIds,
       });
       return this.rewriteForReplan(
-        call.callId,
+        call,
         inferenceInput,
         "WRONG_SELLER_ALLOCATION",
         detail,
@@ -238,7 +238,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
   }
 
   private rewriteForReplan(
-    callId: string,
+    call: Extract<ExecutableTransition, { nextStateId: "function_call" }>["input"]["call"],
     inferenceInput: Extract<ExecutableTransition, { nextStateId: "function_call" }>["input"]["inferenceInput"],
     reason: InterceptionReason,
     detail: string,
@@ -255,10 +255,12 @@ export class RefundInterceptionGate implements InterceptionHandler {
       );
     }
 
-    // Keep context protocol-valid for live OpenAI/Anthropic/Gemini endpoints by
-    // appending a tool output matching the blocked FunctionCallItem's callId.
+    // Mozaik adds [call, outputItem] only after function_call finishes. Since we
+    // intercepted before execution, append BOTH the FunctionCallItem and its
+    // blocked FunctionCallOutputItem so live OpenAI/Anthropic/Gemini APIs receive
+    // a valid assistant(tool_calls) -> tool message pair.
     const blockedToolOutput = FunctionCallOutputItem.create(
-      callId,
+      call.callId,
       JSON.stringify({
         status: "INTERCEPTED_AND_BLOCKED",
         reason,
@@ -271,7 +273,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
 
     const updatedInput = {
       ...inferenceInput,
-      context: inferenceInput.context.addContextItems([blockedToolOutput]),
+      context: inferenceInput.context.addContextItems([call, blockedToolOutput]),
     };
 
     return {
