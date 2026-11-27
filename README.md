@@ -1,35 +1,31 @@
 # RefundGuard
 
-**Concurrent Mozaik AI agents with mid-flight `InterceptionHandler` gating that prevent wrong-seller refund misallocations, stale post-acceptance approvals, and unsafe cross-system refund proposals before marketplace payouts release.**
+**Concurrent Mozaik AI agents with awaited pre-execution interception that prevent wrong-seller refund misallocations, stale post-acceptance approvals, and unsafe cross-system refund proposals before marketplace payouts release.**
 
-Built solo for the **JigJoy Black Friday AI Hackathon (26-27 November 2026, Agents in Finance)** on `@mozaik-ai/core@6.0.0`.
-
----
-
-## The Finance Problem
-
-Two costly marketplace payout failures slip past standard batch-total reconciliation:
-
-1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in one checkout (`CHK-402`). The processor confirms a KSh 10,000 refund and settles **KSh 90,000** net for the batch. The payout draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances exactly to KSh 90,000** and passes batch-total checks, even though unstructured warehouse notes prove **Seller A's** jacket came back (`A: KSh 50,000 / B: KSh 40,000`). If a late QC warehouse correction arrives mid-review or even after initial acceptance, any superseded approval must expire immediately.
-2. **Unsafe Cross-System Refund Proposals During Active Disputes:** While card processors such as Stripe already restrict issuing a refund on the same charge once a dispute is open ([Stripe Disputes Docs](https://docs.stripe.com/disputes/how-disputes-work#during-the-dispute)), marketplace support desks, OMS queues, and seller-payout drafts operate across separate systems. RefundGuard verifies payment linkage (`cardLast4`, checkout/settlement reference, amount within capture, and `status === "OPEN"`) before blocking an unsafe cross-system refund or payout proposal, asks an operator to verify ambiguous partial matches, and ignores unrelated or closed disputes.
-
----
-
-## Verified Live OpenAI Run (`traces/live-run-trace.json`)
-
-In addition to deterministic offline tests for zero-key judge reproducibility, RefundGuard has been verified end-to-end against live **OpenAI `gpt-4o-mini`** via `@mozaik-ai/core@6.0.0` (full trace committed in [`traces/live-run-trace.json`](traces/live-run-trace.json)):
-
-- **Command:** `node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum`
-- **Mode / Model:** `live` / `gpt-4o-mini`
-- **Real concurrent execution overlap:** **`5,454ms` (5.45s)** (`RefundDesk [34ms..8147ms]` overlapped `DisputeFulfillmentSentinel [37ms..5491ms]`)
-- **Live tool calls:** Both `DisputeFulfillmentSentinel` (`publish_sentinel_finding`) and `RefundDeskAgent` (`propose_refund`) executed real model tool calls.
-- **Live interception & re-plan:** `RefundInterceptionGate` blocked `gpt-4o-mini`'s wrong `SELLER-B` proposal at `+4466ms` (`WRONG_SELLER_ALLOCATION`), injected Sentinel's verified `LINE-402-A` / `WH-202` finding, and `gpt-4o-mini` revised and submitted `SELLER-A` (`CORRECTED_READY_FOR_APPROVAL`, total unchanged at KSh 90,000).
+| Submission Detail | Value |
+| :--- | :--- |
+| **Event & Track** | JigJoy Black Friday AI Hackathon (26-27 November 2026, Agents in Finance) |
+| **Runtime** | `@mozaik-ai/core@6.0.0` (TypeScript, Node.js 20+) |
+| **Concurrency Model** | 2 concurrent `Agent` loops per checkout (8 parallel loops in Batch Desk) + shared `RuntimeState` + reactive `SituationHandler`s + awaited `InterceptionHandler` + `AuditObserver` |
+| **Live LLM Proof** | Verified end-to-end on OpenAI `gpt-4o-mini` (`5,454ms` real concurrent overlap, [`traces/live-run-trace.json`](traces/live-run-trace.json)) |
+| **Judge Reproducibility** | Zero API key required out of the box (`npm install && npm test && npm start`); live OpenAI / Anthropic / Gemini enabled automatically via `.env` |
+| **Automated Verification** | **14 / 14** Vitest tests passing (core cases, audit regressions, 4-checkout batch, live mid-run interrupt) |
+| **Data Safety** | 100% synthetic orders, settlements, warehouse notes, and disputes; no real customer data, accounts, or money movement |
 
 ---
 
-## How Our Agents Run Concurrently on Mozaik
+## 1. The Finance Problem & Real-World Platform Gap
 
-RefundGuard uses `@mozaik-ai/core@6.0.0`'s concurrency primitives, not a sequential pipeline and not one chatbot with tools:
+Traditional payment reconciliation verifies that **totals match** (`sum(seller_payouts) == bank_settlement`), which leaves two high-cost Black Friday marketplace failures exposed:
+
+1. **Zero-Sum Wrong-Seller Misallocation:** A customer buys two KSh 10,000 items from **Seller A** and **Seller B** in a single checkout (`CHK-402`). The processor confirms a KSh 10,000 refund and settles **KSh 90,000** net for the batch. The payout draft pays **A: KSh 60,000 / B: KSh 30,000**, which **balances to the exact shilling (KSh 90,000)** and passes total reconciliation, even though unstructured warehouse notes prove **Seller A's** jacket physically came back (supported allocation: **A: KSh 50,000 / B: KSh 40,000**, total still KSh 90,000). If a late QC warehouse inspection arrives while review is running (or even after initial acceptance), any approval based on superseded evidence must expire immediately.
+2. **Unsafe Cross-System Refund Proposals During Active Disputes:** Card processors such as Stripe already restrict issuing a refund on the same charge once a dispute is open ([Stripe Disputes Docs](https://docs.stripe.com/disputes/how-disputes-work#during-the-dispute)), and Adyen validates split instruction syntax rather than physical return truth ([Adyen Split Refunds](https://docs.adyen.com/marketplaces/split-transactions/split-refunds)). In real marketplaces, however, customer support desks, OMS refund queues, 3PL warehouse notes, and seller payout drafts operate across separate systems. RefundGuard deterministically verifies payment-to-dispute linkage (`status === "OPEN"`, `cardLast4`, checkout/settlement reference, and amount within capture) before blocking an unsafe cross-system refund or payout proposal, asks an operator to verify ambiguous partial matches, and ignores unrelated or closed disputes.
+
+---
+
+## 2. How Our Agents Run Concurrently on Mozaik
+
+RefundGuard is built natively on `@mozaik-ai/core@6.0.0`'s reactive concurrency model (not a sequential chain and not a single chatbot with tools):
 
 ```mermaid
 flowchart LR
@@ -54,87 +50,175 @@ flowchart LR
   A2 -. "SemanticEvents" .-> Obs
 ```
 
-### Key Concurrency & Safety Invariants
-- **Two distinct unstructured reasoning tasks:** `RefundDeskAgent` interprets customer support tickets and return policy; `DisputeFulfillmentSentinel` concurrently interprets free-text warehouse intake notes (including negation and reused boxes) and correlates incoming PSP dispute payloads.
-- **True non-blocking overlap (single checkout & multi-checkout batch):** `case.opened` fans out synchronously to both agents' `SituationHandler`s (`AuditObserver` measures actual overlap on every run). In **Black Friday Batch Desk** (`GET /api/batch`), 4 distinct multi-seller checkouts (8 Kenyan sellers across `CHK-402`, `CHK-518`, `CHK-629`, `CHK-741`) run concurrently across 8 Mozaik agent loops, auto-clearing clean checkouts while quarantining exceptions for human **Approve / Hold / Reject** sign-off.
-- **Pre-execution `InterceptionHandler` (`RefundInterceptionGate`):** Hooks `nextStateId === "function_call"` (`propose_refund`), awaits Sentinel for the latest `epoch`, and blocks/rewrites wrong-seller or stale-epoch proposals or halts fail-closed on missing evidence, active linked disputes, or ambiguous dispute matches.
-- **Real-time live mid-run interrupt:** `POST /api/sessions/:sessionId/inject` injects late QC warehouse corrections or dispute webhooks directly into an actively running Mozaik session while agents are in flight.
-- **Post-acceptance readiness invalidation:** If relevant evidence changes *after* `proposal.accepted`, `RefundGuardState` immediately archives the prior proposal as superseded, clears readiness, increments `epoch`, and requires revalidation. Before returning any ready verdict, [`runRefundGuardCase`](src/engine/run-case.ts) verifies that both `acceptedProposal.epoch` and `sentinelFinding.epoch` match `state.epoch`; if revalidation cannot complete, it fails closed to `PENDING_REVALIDATION`.
+### Mozaik Primitive Mapping (Code-Level Reference)
+
+| Mozaik Primitive | Implementation | Role in RefundGuard |
+| :--- | :--- | :--- |
+| `defineRuntime<RefundGuardState>()` | [`src/mozaik/runtime.ts`](src/mozaik/runtime.ts) | Creates an isolated runtime per checkout session with shared mutable `RefundGuardState` (`epoch`, `sentinelFindings`, `supersededProposals`, `interceptions`, `timeline`). |
+| Non-blocking `runLoop` + `SituationHandler` | [`src/mozaik/agents/refund-desk.ts`](src/mozaik/agents/refund-desk.ts), [`src/mozaik/agents/sentinel.ts`](src/mozaik/agents/sentinel.ts) | `case.opened` fans out synchronously to both agents, launching two independent `runLoop`s in parallel. `evidence.updated` wakes Sentinel on mid-flight updates and triggers RefundDesk revalidation if an earlier approval was invalidated. |
+| Awaited `InterceptionHandler` | [`src/mozaik/interception.ts`](src/mozaik/interception.ts) | Passed as the 4th argument to `RefundDeskAgent`'s `runLoop`. Hooks `nextStateId === "function_call"` (`propose_refund`), awaits Sentinel for the latest `epoch`, and blocks/rewrites wrong-seller or stale-epoch calls (appending `[call, blockedToolOutput]` for strict live OpenAI/Anthropic/Gemini tool-call protocol validity) or halts fail-closed into `model_message`. |
+| `AuditObserver` (`createHuman`) | [`src/mozaik/agents/observer.ts`](src/mozaik/agents/observer.ts) | Listens to `model.answer`, `interception.started`, and `interception.finished` `SemanticEvent`s and measures exact millisecond overlap between both agents' execution windows. |
+| Custom `InferenceRunner` | [`src/mozaik/runner.ts`](src/mozaik/runner.ts) | Auto-selects real Mozaik live models (`gpt-5.4-mini`, `claude-haiku-4-5`, `gemini-3.5-flash`, or custom `gpt-4o-mini`) when an API key is set, or falls back to `RefundGuardMockRunner` (dynamic prompt parser) for zero-key judge verification. |
+
+### Core Safety Invariants
+1. **Strict Current-Epoch Readiness Invariant ([`src/engine/run-case.ts`](src/engine/run-case.ts)):** A ready verdict (`READY_FOR_HUMAN_APPROVAL` or `CORRECTED_READY_FOR_APPROVAL`) is never returned unless `acceptedProposal.epoch === state.epoch`, `sentinelFinding.epoch === state.epoch`, `sentinelFinding.status === "VERIFIED_RETURN"`, `acceptedProposal.debitSellerId === sentinelFinding.verifiedSellerId`, and no active or ambiguous linked dispute exists. If a post-acceptance update arrives and revalidation cannot finish, the system fails closed to `PENDING_REVALIDATION`.
+2. **Deterministic Payment-to-Dispute Verification ([`src/finance/dispute-match.ts`](src/finance/dispute-match.ts)):** Only freezes on `VERIFIED_ACTIVE_MATCH` (`status === "OPEN"`, matching `cardLast4`, matching checkout suffix or `paymentSettlementId`, and amount within capture). Partial/conflicting signals route to `VERIFY_DISPUTE_MATCH`; unrelated or closed disputes are ignored without disturbing clean checkouts.
+3. **Zero LLM Arithmetic ([`src/finance/ledger.ts`](src/finance/ledger.ts)):** LLMs parse unstructured text only. All shilling totals, deltas, reserves, and source citations are computed strictly by pure integer TypeScript functions.
 
 ---
 
-## Quickstart (Reproducible Zero-Key Path + Live Model Runner)
+## 3. Verified Live OpenAI Run (`gpt-4o-mini`)
 
-Requires **Node.js 20+** (tested on Node 22 & Node 26).
+RefundGuard was verified end-to-end against live OpenAI **`gpt-4o-mini`** with the full unedited trace committed at [`traces/live-run-trace.json`](traces/live-run-trace.json):
+
+```text
+Command:  node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum
+Mode:     live | Model: gpt-4o-mini
+Verdict:  CORRECTED_READY_FOR_APPROVAL | Final Debit: SELLER-A
+Sentinel tool called:   true  (publish_sentinel_finding at +2829ms -> SELLER-A / LINE-402-A)
+Desk tool submitted:    true  (revised propose_refund -> SELLER-A after interception)
+Wrong proposal blocked: true  (RefundInterceptionGate blocked SELLER-B at +4466ms)
+Concurrent overlap:     true  (RefundDesk [34ms..8147ms] overlapped DisputeFulfillmentSentinel [37ms..5491ms] for 5454ms)
+```
+
+---
+
+## 4. Quickstart & Judge Verification Commands
+
+Requires **Node.js 20+** (verified on Node 22 & Node 26). No API key is required for full verification.
 
 ```bash
+git clone https://github.com/Grolds-Code/refund-guard.git
+cd refund-guard
 npm install
-npm test          # 14 automated tests (6 core + 6 audit regressions + batch + live interrupt)
-npm run compare   # Ticket+Draft vs 1-Agent Snapshot vs Concurrent RefundGuard
-npm start         # Interactive dark UI on http://localhost:3000
+```
+
+### Standard Commands
+```bash
+npm run typecheck   # Strict TypeScript check (0 errors)
+npm test            # 14 automated tests (core, regressions, 4-checkout batch, live interrupt)
+npm run compare     # 3-way benchmark: Ticket+Draft vs 1-Agent Snapshot vs RefundGuard
+npm start           # Interactive dark UI (desktop & mobile responsive) on http://localhost:3000
+npm run cli         # Run all 5 scenarios in terminal
 ```
 
 ### Launcher Fallback (`node --import tsx`)
-If your environment hits an IPC error running the `tsx` CLI directly, invoke Node's loader flag instead:
+If your environment hits an IPC pipe error invoking the `tsx` CLI wrapper directly, use Node's `--import tsx` loader:
 
 ```bash
 node --import tsx src/server.ts
 node --import tsx src/compare.ts
 node --import tsx src/cli.ts case-4-late-correction-midflight
+node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum
 ```
 
-### Live Model Verification (`npm run trace:live`)
-- **Offline judge reproducibility (default):** When no API key is configured, RefundGuard runs on `RefundGuardMockRunner` (a Mozaik `InferenceRunner` modeled on `mozaik-examples/custom-inference-runner`) that parses order lines, warehouse notes, tickets, disputes, and interception feedback dynamically.
-- **Real provider run:** Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` in `.env` (see [`.env.example`](.env.example)), then capture a real model trace:
+### Running With a Real LLM Provider
+Copy `.env.example` to `.env` and supply any one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`:
 
+```env
+OPENAI_API_KEY=sk-...
+REFUND_GUARD_MODE=live
+REFUND_GUARD_MODEL=gpt-4o-mini
+```
+
+Then capture a fresh live trace:
 ```bash
 node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum
 ```
 
 ---
 
-## 90-Second Demo Flow
+## 5. Multi-Checkout Black Friday Batch Desk (`BATCH-BF-2026-01`)
 
-1. Run `npm start` (or `node --import tsx src/server.ts`) and open `http://localhost:3000`.
-2. **Open on the KSh 90,000 zero-sum batch (Case 4, default view):** Draft payouts are **A: KSh 60,000 / B: KSh 30,000** (total KSh 90,000). Show the **Concurrent Execution Timeline** where `RefundDeskAgent` and `DisputeFulfillmentSentinel` overlap, then watch the late QC warehouse correction arrive (`epoch 1 -> 2`), expire the stale Seller B proposal (`SUPERSEDED_EVIDENCE`), and recompute payouts to **A: KSh 50,000 / B: KSh 40,000** while the total still balances at **KSh 90,000**.
-3. **Show the formatted Source Evidence Cards** directly below the ledger: point to `WH-404-V1`, `WH-404-V2`, `STL-PAY-402`, and `STL-REF-402`.
-4. *(Optional live click)* Enable **Live Interrupt Window**, click **Run Review** on Case 1, and click **Interrupt: Dispute** mid-run to fire a live `POST /api/sessions/:id/inject` event while agents are executing, OR switch to **Black Friday Batch Desk (4 Checkouts)** to show 8 concurrent agent loops auto-clearing `CHK-518` and quarantining `CHK-402`, `CHK-629`, and `CHK-741` with live Approve/Hold/Reject buttons.
-5. **Show a negative control:** On Case 1, select **Unrelated dispute (card 8812 / ref 999)** -> confirm it is ignored (`READY_FOR_HUMAN_APPROVAL`), or click **Case 3 (Missing Evidence)** for a fail-closed hold.
-6. End with `npm test` (14/14 passing) and `npm run compare`.
+Switch to **Black Friday Batch Desk (4 Checkouts)** in the top bar (or hit `GET /api/batch`) to run 4 distinct multi-seller checkouts across 8 Kenyan sellers concurrently (8 parallel Mozaik agent loops):
+
+| Checkout | Sellers | Case Type | Expected Verdict | Supported Release | Reserve Held |
+| :--- | :--- | :--- | :--- | ---: | ---: |
+| `CHK-402` | Nairobi Streetwear Co. / Rift Valley Footwear | Mid-flight QC warehouse correction (`WH-404-V1` -> `WH-404-V2`) | `CORRECTED_READY_FOR_APPROVAL` | KSh 90,000 | KSh 0 |
+| `CHK-518` | Kilimani Audio Ltd / Mombasa Tech Gear | Clean verified electronics return (`AUD-PRO-01`) | `READY_FOR_HUMAN_APPROVAL` | KSh 95,000 | KSh 0 |
+| `CHK-629` | Eldoret Homeware / Kisumu Ceramics Studio | Missing physical return parcel (`WH-629`) | `HOLD_MISSING_EVIDENCE` | KSh 40,000 | KSh 8,000 |
+| `CHK-741` | Naivasha Coffee Roasters / Nakuru Leathercraft | Active linked PSP dispute (`DSP-741`, card `7784`, `STL-PAY-741`) | `FROZEN_DISPUTE_COLLISION` | KSh 78,000 | KSh 12,000 |
+
+Operators can click **Approve / Hold / Reject** on every checkout row to update live Batch Disbursement totals, or click **Inspect** to open that checkout's full timeline, interception log, and source evidence cards.
 
 ---
 
-## Fair Baseline Comparison (`npm run compare`)
+## 6. Fair Three-Way Baseline Comparison (`npm run compare`)
 
-To avoid conflating evidence access with concurrency, `npm run compare` runs **two explicitly labeled baselines** alongside RefundGuard (without summing artificial penalties across synthetic fixtures):
+To isolate the specific value of Mozaik concurrency and mid-flight interception without conflating it with evidence access, `npm run compare` evaluates **two explicitly labeled single-agent baselines** alongside RefundGuard (without summing artificial penalties across synthetic fixtures):
 
-| Scenario | Ticket-and-Draft Baseline *(no warehouse/dispute feed)* | 1-Agent Snapshot Baseline *(same `t=0` ticket, draft, warehouse, dispute & policy)* | RefundGuard *(2 concurrent Mozaik agents + `InterceptionGate`)* | Concurrent Overlap |
+| Scenario | Ticket-and-Draft Baseline *(no warehouse/dispute input)* | 1-Agent Snapshot Baseline *(exact same `t=0` ticket, draft, warehouse, dispute & policy)* | RefundGuard *(2 concurrent Mozaik agents + `InterceptionGate`)* | Concurrent Overlap |
 | :--- | :--- | :--- | :--- | :---: |
 | 1. Clean Pass | PASS (`SELLER-A`) | PASS (`SELLER-A`) | PASS (`SELLER-A`) | YES |
 | 2. Zero-Sum Trap | FAIL (`SELLER-B`) | PASS (`SELLER-A`) | PASS (`SELLER-A`) | YES |
 | 3. Missing Evidence | FAIL (`SELLER-B`) | PASS (`HOLD_MISSING_EVIDENCE`) | PASS (`HOLD_MISSING_EVIDENCE`) | YES |
 | 4. Mid-Flight Correction | FAIL (`SELLER-B`) | FAIL (`SELLER-B` stale `epoch 1`) | PASS (`SELLER-A` at `epoch 2`) | YES |
 | 5. Dispute Collision | FAIL (`SELLER-A`) | FAIL (`SELLER-A` unsafe refund) | PASS (`FROZEN_DISPUTE_COLLISION`) | YES |
-| **Score** | **1 / 5** | **3 / 5** *(isolates concurrency to mid-flight Cases 4 & 5)* | **5 / 5** | **5 / 5** |
+| **Total** | **1 / 5** | **3 / 5** *(proves concurrency isolates mid-flight Cases 4 & 5)* | **5 / 5** | **5 / 5** |
 
 ---
 
-## Financial Grounding & Explicit Hold Policy
+## 7. Automated Test Matrix (`npm test`: 14 / 14 Passing)
 
-- **Zero LLM arithmetic:** All amounts are integer Kenyan Shillings (KSh) computed in [`src/finance/ledger.ts`](src/finance/ledger.ts).
-- **Requested Refund vs. Held Reserve:** RefundGuard always reports `requestedRefundKsh` separately from `heldReserveKsh` along with `holdPolicyExplanation`:
-  - **Active linked dispute (`FROZEN_DISPUTE_COLLISION`)** with an identified seller line: blocks the unsafe cross-system refund proposal and holds only that seller's disputed checkout line (leaving the undisputed seller payout clear).
-  - **Missing evidence / ambiguous dispute / pending revalidation:** holds unsettled checkout lines in reserve because seller attribution is unresolved, while clearly displaying the requested refund separately.
-- **Synthetic data only:** All orders, settlements, seller accounts, warehouse notes, and disputes are synthetic. No real accounts or money movement occur.
+| # | Test | What It Proves |
+| :---: | :--- | :--- |
+| 1 | `Case 1: Clean Allocation` | Verified allocation clears (`A: 50k / B: 40k`, total `90k`), `0` interceptions, real overlap verified. |
+| 2 | `Case 2: Wrong-Seller Zero-Sum Trap` | Draft balances at `KSh 90,000` (`60k/30k`), interceptor catches Seller B error and corrects to `50k/40k`. |
+| 3 | `Case 3: Missing Warehouse Evidence` | Fail-closed `HOLD_MISSING_EVIDENCE`; separates `requestedRefundKsh` from `heldReserveKsh`. |
+| 4 | `Case 4: Mid-Flight Warehouse Correction` | Late `WH-404-V2` bumps `epoch 1 -> 2`; `SUPERSEDED_EVIDENCE` rejects stale Seller B and approves Seller A. |
+| 5 | `Case 5: Mid-Flight Dispute Collision` | Verified active dispute (`DSP-505`) blocks unsafe cross-system refund while holding only Seller A's disputed `KSh 10,000`. |
+| 6 | `Interactive Input Flip` | Editing warehouse note text from Jacket to Boots flips verdict live to `SELLER-B` (`60k/30k`). |
+| 7 | `Regression 1A: Post-Acceptance Correction` | Event-driven injection on `proposal.accepted` invalidates epoch-1 Seller A and revalidates to epoch-2 Seller B. |
+| 8 | `Regression 1B: Post-Acceptance Dispute` | Event-driven matching dispute after `proposal.accepted` invalidates readiness and freezes checkout. |
+| 9 | `Regression 1C: Incomplete Revalidation` | Post-acceptance update with revalidation disabled fails closed to `PENDING_REVALIDATION` (never stale ready). |
+| 10 | `Regression 2A: Unrelated Dispute` | Dispute with different checkout, card (`8812`), and amount (`KSh 4,500`) is ignored; clean checkout stays ready. |
+| 11 | `Regression 2B: Ambiguous Dispute Match` | Partial overlap (matching card `4421` & amount, mismatched ref `988`) routes to `VERIFY_DISPUTE_MATCH`. |
+| 12 | `Regression 4: Fair Snapshot Baseline` | Proves 1-Agent Snapshot passes static Case 2 yet fails mid-flight Case 4 where RefundGuard succeeds. |
+| 13 | `Batch Desk (4 Checkouts / 8 Loops)` | Runs all 4 distinct Black Friday checkouts concurrently with 100% verified overlap and exception isolation. |
+| 14 | `Live External Interrupt Hook` | External mid-run injection via `onSessionReady` interrupts `RefundDeskAgent` live and flips to epoch 2. |
 
 ---
 
-## Project Structure
+## 8. Financial Grounding & Explicit Hold Policy
+
+Every number in [`src/finance/ledger.ts`](src/finance/ledger.ts) is computed in integer KSh and cites exact immutable source record IDs (`DRF-*`, `TKT-*`, `STL-*`, `LINE-*`, `WH-*`, `DSP-*`). RefundGuard always reports `requestedRefundKsh`, `blockedUnsafeRefundKsh`, and `heldReserveKsh` separately with an explicit `holdPolicyExplanation`:
+
+- **Approved verdicts (`READY_FOR_HUMAN_APPROVAL`, `CORRECTED_READY_FOR_APPROVAL`):** Release full net settlement; deduct refund only from the verified seller.
+- **Active linked dispute (`FROZEN_DISPUTE_COLLISION`) with verified seller line:** Block the unsafe cross-system refund proposal (`requestedRefundKsh`) and hold only the disputed seller's checkout line in reserve, keeping the undisputed seller's payout clear.
+- **Unresolved attribution (`HOLD_MISSING_EVIDENCE`, `VERIFY_DISPUTE_MATCH`, `PENDING_REVALIDATION`):** Hold unsettled checkout lines in reserve rather than guessing which seller absorbs the deduction, while displaying `requestedRefundKsh` separately.
+
+---
+
+## 9. HTTP / SSE Endpoints (`src/server.ts`)
+
+| Endpoint | Method | Purpose |
+| :--- | :---: | :--- |
+| `/` | `GET` | Responsive obsidian dark UI (desktop, tablet, and mobile). |
+| `/api/health` | `GET` | Runtime status, active mode (`mock` or `live`), model name, and loaded counts. |
+| `/api/scenarios` | `GET` | All 5 single-checkout scenarios and 4 Black Friday batch checkouts. |
+| `/api/run` | `POST` | Runs a checkout concurrently on Mozaik, streaming `session`, `timeline`, and `report` via SSE. |
+| `/api/sessions/:id/inject` | `POST` | Injects a live warehouse correction or dispute webhook directly into an actively running Mozaik session. |
+| `/api/batch` | `GET` | Runs all 4 Black Friday batch checkouts concurrently across 8 Mozaik agent loops. |
+| `/api/compare` | `GET` | Executes the 5-case three-way benchmark (`Ticket+Draft` vs. `1-Agent Snapshot` vs. `RefundGuard`). |
+
+---
+
+## 10. 90-Second Demo Script
+
+1. Run `npm start` (or `node --import tsx src/server.ts`) and open `http://localhost:3000`.
+2. **0:00-0:30 (Zero-Sum Batch + Mid-Flight Expiration):** Open on Case 4 (`CHK-402`, batch total **KSh 90,000**, draft **A: 60k / B: 30k**). Point to the **Concurrent Execution Timeline** showing both agents overlapping, the mid-flight QC correction bumping `epoch 1 -> 2`, `SUPERSEDED_EVIDENCE` expiring Seller B, and payouts updating to **A: KSh 50,000 / B: KSh 40,000** (same KSh 90,000 total).
+3. **0:30-0:50 (Source Grounding):** Scroll directly to the **Source Evidence Records** cards (`WH-404-V1`, `WH-404-V2`, `STL-PAY-402`, `STL-REF-402`) proving every shilling maps to source records.
+4. **0:50-1:10 (Negative Control & Batch Desk):** Switch to Case 1 with **Unrelated dispute (card 8812 / ref 999)** to show it is ignored (`READY_FOR_HUMAN_APPROVAL`), then toggle **Black Friday Batch Desk (4 Checkouts)** to show 8 concurrent loops isolating exceptions with live **Approve / Hold / Reject** buttons.
+5. **1:10-1:30 (Judge Reproduction):** Show `npm test` (14/14 passing), `npm run compare` (`1/5` vs. `3/5` vs. `5/5`), and `traces/live-run-trace.json` (`gpt-4o-mini`, `5,454ms` overlap).
+
+---
+
+## 11. Project Structure
 
 ```text
 src/
   finance/
-    types.ts           # Immutable source records, dispute match, verdict & ledger types
+    types.ts           # Immutable source record, dispute match, verdict & ledger types
     dispute-match.ts   # Deterministic payment-to-dispute linkage verifier
     ledger.ts          # Pure deterministic integer-KSh calculator & explicit hold policy
     fixtures.ts        # 5 core scenarios + unrelated/ambiguous dispute fixtures
@@ -156,7 +240,7 @@ src/
   live-trace.ts        # Real provider verification harness (`npm run trace:live`)
   server.ts            # Node HTTP + SSE server with /api/batch and /api/sessions/:id/inject
 public/
-  index.html           # Obsidian dark UI with Batch Desk, Source Cards & Live Interrupts
+  index.html           # Responsive obsidian dark UI (desktop, tablet & mobile)
 traces/
   live-run-trace.json  # Verified live OpenAI gpt-4o-mini concurrent trace (5,454ms overlap)
 tests/

@@ -48,6 +48,7 @@
       font-family: var(--sans);
       font-size: 13.5px;
       line-height: 1.5;
+      overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
     }
 
@@ -65,7 +66,7 @@
       position: sticky;
       top: 0;
       z-index: 20;
-      background: rgba(9, 9, 11, 0.84);
+      background: rgba(9, 9, 11, 0.88);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       border-bottom: 1px solid var(--border);
@@ -77,13 +78,15 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 14px;
+      gap: 12px;
       flex-wrap: wrap;
     }
     .brand {
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-wrap: wrap;
+      min-width: 0;
     }
     .logo-mark {
       width: 24px;
@@ -96,6 +99,7 @@
       font-family: var(--mono);
       font-size: 11px;
       font-weight: 700;
+      flex-shrink: 0;
     }
     .brand h1 {
       margin: 0;
@@ -110,6 +114,7 @@
       border-radius: 8px;
       background: var(--surface-1);
       border: 1px solid var(--border);
+      max-width: 100%;
     }
     .view-btn {
       border: 1px solid transparent;
@@ -120,6 +125,7 @@
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
+      white-space: nowrap;
     }
     .view-btn:hover { color: var(--ink); }
     .view-btn.active {
@@ -144,6 +150,10 @@
       color: var(--ink-2);
       font-family: var(--mono);
       font-size: 11px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .dot {
       width: 6px;
@@ -168,10 +178,6 @@
       flex-direction: column;
       gap: 16px;
     }
-    @media (max-width: 768px) {
-      .shell { padding: 14px 14px 32px; }
-      .header-inner { padding: 10px 14px; }
-    }
     .hidden { display: none !important; }
 
     .scenario-strip {
@@ -179,6 +185,11 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      flex-wrap: wrap;
+    }
+    .strip-actions {
+      display: flex;
+      gap: 8px;
       flex-wrap: wrap;
     }
     .tabs {
@@ -190,6 +201,8 @@
       border: 1px solid var(--border);
       border-radius: 10px;
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
       max-width: 100%;
     }
     .tab-btn {
@@ -203,6 +216,7 @@
       font-weight: 500;
       cursor: pointer;
       white-space: nowrap;
+      flex-shrink: 0;
       transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
     }
     .tab-btn:hover { color: var(--ink); background: rgba(255, 255, 255, 0.04); }
@@ -224,11 +238,13 @@
       justify-content: center;
       gap: 6px;
       padding: 7px 13px;
+      min-height: 34px;
       border-radius: var(--radius-sm);
       font-family: var(--sans);
       font-size: 12.5px;
       font-weight: 500;
       cursor: pointer;
+      white-space: nowrap;
       transition: background 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
     }
     .btn:disabled { opacity: 0.38; cursor: not-allowed; }
@@ -261,6 +277,7 @@
     }
     .btn-sm {
       padding: 4px 9px;
+      min-height: 30px;
       font-size: 11.5px;
     }
     .btn-sm.selected-ok {
@@ -289,14 +306,12 @@
       grid-template-columns: repeat(4, 1fr);
       gap: 12px;
     }
-    @media (max-width: 960px) {
-      .kpi-grid, .kpi-grid-4 { grid-template-columns: 1fr; }
-    }
     .surface {
       background: var(--surface-1);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+      min-width: 0;
     }
     .kpi {
       padding: 16px 18px;
@@ -310,6 +325,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 8px;
+      flex-wrap: wrap;
     }
     .eyebrow {
       font-size: 11px;
@@ -323,6 +339,7 @@
       font-weight: 600;
       letter-spacing: -0.025em;
       font-variant-numeric: tabular-nums;
+      word-break: break-word;
     }
     .kpi-val.mono { font-family: var(--mono); font-size: 16px; }
     .kpi-sub { font-size: 12px; color: var(--ink-2); line-height: 1.4; }
@@ -338,6 +355,8 @@
       font-weight: 500;
       background: var(--surface-2);
       color: var(--ink-2);
+      max-width: 100%;
+      white-space: nowrap;
     }
     .status-tag.ok { background: var(--emerald-soft); color: var(--emerald); }
     .status-tag.warn { background: var(--amber-soft); color: var(--amber); }
@@ -349,14 +368,14 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 10px;
       flex-wrap: wrap;
       margin-bottom: 12px;
     }
     .gantt-legend {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
       font-size: 11.5px;
       color: var(--ink-3);
       font-family: var(--mono);
@@ -368,9 +387,6 @@
       grid-template-columns: 180px 1fr 72px;
       align-items: center;
       gap: 12px;
-    }
-    @media (max-width: 680px) {
-      .gantt-row { grid-template-columns: 115px 1fr 56px; }
     }
     .gantt-label {
       font-family: var(--mono);
@@ -412,9 +428,6 @@
       grid-template-columns: 356px minmax(0, 1fr);
       gap: 16px;
       align-items: start;
-    }
-    @media (max-width: 1040px) {
-      .workspace-grid { grid-template-columns: 1fr; }
     }
 
     .card-head {
@@ -488,7 +501,7 @@
       background: var(--surface-2);
       border: 1px solid var(--border);
       border-radius: 5px;
-      padding: 3px 8px;
+      padding: 4px 8px;
       font-size: 11px;
       color: var(--ink-2);
       cursor: pointer;
@@ -521,7 +534,18 @@
 
     .right-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
-    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    /* Responsive Horizontal Table Wrapper */
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    table {
+      width: 100%;
+      min-width: 540px;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+    }
     th {
       font-size: 11px;
       font-weight: 500;
@@ -531,6 +555,7 @@
       padding: 0 10px 10px;
       border-bottom: 1px solid var(--border);
       text-align: right;
+      white-space: nowrap;
     }
     th:first-child, td:first-child { text-align: left; padding-left: 0; }
     th:last-child, td:last-child { padding-right: 0; }
@@ -541,8 +566,9 @@
       font-size: 12.5px;
       text-align: right;
       color: var(--ink);
+      white-space: nowrap;
     }
-    td:first-child { font-family: var(--sans); font-size: 13px; }
+    td:first-child { font-family: var(--sans); font-size: 13px; white-space: normal; min-width: 165px; }
     tbody tr:last-child td { border-bottom: none; }
     tr.total-row td {
       font-weight: 600;
@@ -580,6 +606,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      flex-wrap: wrap;
     }
     .baseline-pill code {
       font-family: var(--mono);
@@ -600,21 +627,18 @@
       flex-wrap: wrap;
     }
 
-    /* Formatted Source Record Cards */
     .source-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
       margin-top: 12px;
     }
-    @media (max-width: 780px) {
-      .source-grid { grid-template-columns: 1fr; }
-    }
     .source-card {
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       padding: 11px 13px;
+      min-width: 0;
     }
     .source-card-head {
       display: flex;
@@ -622,13 +646,9 @@
       justify-content: space-between;
       gap: 8px;
       margin-bottom: 6px;
+      flex-wrap: wrap;
     }
-    .source-id {
-      font-family: var(--mono);
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--ink);
-    }
+    .source-id { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--ink); }
     .source-kind {
       font-family: var(--mono);
       font-size: 10px;
@@ -636,25 +656,13 @@
       color: var(--ink-3);
       letter-spacing: 0.05em;
     }
-    .source-body {
-      font-size: 12px;
-      color: var(--ink-2);
-      line-height: 1.48;
-    }
-    .source-meta {
-      margin-top: 6px;
-      font-family: var(--mono);
-      font-size: 10.5px;
-      color: var(--ink-3);
-    }
+    .source-body { font-size: 12px; color: var(--ink-2); line-height: 1.48; word-break: break-word; }
+    .source-meta { margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); word-break: break-word; }
 
     .split-bottom {
       display: grid;
       grid-template-columns: 1fr 1.15fr;
       gap: 16px;
-    }
-    @media (max-width: 900px) {
-      .split-bottom { grid-template-columns: 1fr; }
     }
     .gate-item {
       padding: 12px 14px;
@@ -672,10 +680,10 @@
       margin-bottom: 6px;
       flex-wrap: wrap;
     }
-    .gate-desc { font-size: 12.5px; color: var(--ink-2); line-height: 1.48; }
-    .gate-foot { margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+    .gate-desc { font-size: 12.5px; color: var(--ink-2); line-height: 1.48; word-break: break-word; }
+    .gate-foot { margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); word-break: break-word; }
 
-    .filter-pills { display: flex; gap: 4px; }
+    .filter-pills { display: flex; gap: 4px; flex-wrap: wrap; }
     .filter-pill {
       border: 1px solid transparent;
       background: transparent;
@@ -715,12 +723,83 @@
       font-weight: 500;
       color: var(--ink);
       margin-bottom: 2px;
+      flex-wrap: wrap;
     }
     .feed-epoch { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
     .feed-msg { font-size: 12px; color: var(--ink-2); word-break: break-word; }
 
     .benchmark-card { display: none; }
     .benchmark-card.visible { display: block; }
+
+    /* Responsive Breakpoints */
+    @media (max-width: 1040px) {
+      .workspace-grid { grid-template-columns: 1fr; }
+      .kpi-grid, .kpi-grid-4 { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 900px) {
+      .split-bottom { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 768px) {
+      .header-inner { padding: 10px 14px; gap: 10px; }
+      .brand { width: 100%; justify-content: flex-start; }
+      .view-switch { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
+      .view-btn {
+        width: 100%;
+        text-align: center;
+        padding: 7px 8px;
+        font-size: 11.5px;
+        white-space: normal;
+        line-height: 1.25;
+      }
+      .header-right { width: 100%; justify-content: space-between; }
+      .shell { padding: 14px 14px 36px; gap: 12px; }
+      .source-grid { grid-template-columns: 1fr; }
+      .strip-actions { width: 100%; }
+      .strip-actions .btn { flex: 1; }
+      #runBatchBtn { width: 100%; }
+      select { min-width: 0; max-width: 100%; }
+    }
+    @media (max-width: 600px) {
+      .kpi-grid, .kpi-grid-4 { grid-template-columns: 1fr; }
+      .card-head { padding: 12px 14px; }
+      .card-body { padding: 14px; }
+      .kpi { padding: 14px; }
+      .gantt-card { padding: 14px; }
+      .gantt-row {
+        grid-template-columns: 1fr auto;
+        gap: 6px 10px;
+      }
+      .gantt-track {
+        grid-column: 1 / -1;
+        order: 3;
+      }
+      .feed-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+      .interrupt-btns {
+        grid-template-columns: 1fr;
+      }
+      .operator-bar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .operator-bar > div {
+        display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+      }
+      .operator-bar .btn-sm {
+        white-space: normal;
+        text-align: center;
+        line-height: 1.25;
+        padding: 6px 6px;
+      }
+      .meta-chip.hide-xs { display: none; }
+      .strip-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
@@ -735,7 +814,7 @@
         </div>
       </div>
       <div class="header-right">
-        <span class="meta-chip">@mozaik-ai/core@6.0.0</span>
+        <span class="meta-chip hide-xs">@mozaik-ai/core@6.0.0</span>
         <span id="modeChip" class="meta-chip"><span class="dot sky"></span>Loading</span>
         <button id="compareBtn" class="btn btn-ghost">5-Case Benchmark</button>
       </div>
@@ -746,7 +825,7 @@
   <div id="inspectorView" class="shell">
     <div class="scenario-strip">
       <div id="scenarioTabs" class="tabs" role="tablist"></div>
-      <div style="display:flex; gap:8px;">
+      <div class="strip-actions">
         <button id="downloadBtn" class="btn btn-ghost" disabled>Export Evidence JSON</button>
         <button id="topRunBtn" class="btn btn-primary">Run Review</button>
       </div>
@@ -869,24 +948,26 @@
             <span class="eyebrow">Zero LLM arithmetic</span>
           </div>
           <div class="card-body">
-            <table>
-              <thead>
-                <tr>
-                  <th>Seller</th>
-                  <th>Gross</th>
-                  <th>Draft Payout</th>
-                  <th>Supported</th>
-                  <th>Delta</th>
-                </tr>
-              </thead>
-              <tbody id="ledgerBody">
-                <tr>
-                  <td colspan="5" style="text-align:center; color:var(--ink-3); font-family:var(--sans);">
-                    Run a scenario to compute grounded allocations.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Seller</th>
+                    <th>Gross</th>
+                    <th>Draft Payout</th>
+                    <th>Supported</th>
+                    <th>Delta</th>
+                  </tr>
+                </thead>
+                <tbody id="ledgerBody">
+                  <tr>
+                    <td colspan="5" style="text-align:center; color:var(--ink-3); font-family:var(--sans);">
+                      Run a scenario to compute grounded allocations.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
             <div class="provenance-bar">
               <div id="citationsRow" class="cite-group"></div>
@@ -945,18 +1026,20 @@
             <span id="benchmarkSummary" class="status-tag ok">5/5 verified</span>
           </div>
           <div class="card-body">
-            <table>
-              <thead>
-                <tr>
-                  <th>Scenario</th>
-                  <th>Ticket+Draft</th>
-                  <th>1-Agent Snapshot</th>
-                  <th>RefundGuard</th>
-                  <th>Overlap</th>
-                </tr>
-              </thead>
-              <tbody id="benchmarkBody"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Scenario</th>
+                    <th>Ticket+Draft</th>
+                    <th>1-Agent Snapshot</th>
+                    <th>RefundGuard</th>
+                    <th>Overlap</th>
+                  </tr>
+                </thead>
+                <tbody id="benchmarkBody"></tbody>
+              </table>
+            </div>
           </div>
         </section>
       </div>
@@ -1002,25 +1085,27 @@
         <span id="batchStatusTag" class="status-tag">idle</span>
       </div>
       <div class="card-body">
-        <table>
-          <thead>
-            <tr>
-              <th>Checkout &amp; Sellers</th>
-              <th>Verdict</th>
-              <th>Supported Release</th>
-              <th>Reserve Held</th>
-              <th>Operator Decision</th>
-              <th>Inspect</th>
-            </tr>
-          </thead>
-          <tbody id="batchBody">
-            <tr>
-              <td colspan="6" style="text-align:center; color:var(--ink-3); font-family:var(--sans);">
-                Click "Run 4-Checkout Batch Audit" to run all 4 checkouts concurrently.
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Checkout &amp; Sellers</th>
+                <th>Verdict</th>
+                <th>Supported Release</th>
+                <th>Reserve Held</th>
+                <th>Operator Decision</th>
+                <th>Inspect</th>
+              </tr>
+            </thead>
+            <tbody id="batchBody">
+              <tr>
+                <td colspan="6" style="text-align:center; color:var(--ink-3); font-family:var(--sans);">
+                  Click "Run 4-Checkout Batch Audit" to run all 4 checkouts concurrently.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   </div>
