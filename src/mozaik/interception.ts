@@ -4,40 +4,113 @@ import {
   type ExecutableTransition,
   type InterceptionHandler,
 } from "@mozaik-ai/core";
+import { checkMoneyReconciliation } from "../finance/ledger.js";
 import type {
+  FinalVerdict,
   InterceptionReason,
   InterceptionRecord,
   SellerId,
+  SentinelFinding,
 } from "../finance/types.js";
 import type { RefundGuardState } from "./runtime.js";
 
 interface ProposeRefundArgs {
-  checkoutId?: string;
-  debitSellerId?: SellerId;
-  refundAmountKsh?: number;
-  epoch?: number;
-  rationale?: string;
+  checkoutId?: unknown;
+  debitSellerId?: unknown;
+  refundAmountKsh?: unknown;
+  epoch?: unknown;
+  rationale?: unknown;
+}
+
+/**
+ * Independently validates every field of a SentinelFinding against immutable
+ * RuntimeState records so the gate never blindly trusts hallucinated or stale findings.
+ */
+export function validateSentinelFindingForClearance(
+  state: RefundGuardState,
+  finding: SentinelFinding | null,
+): { valid: boolean; reason?: string } {
+  if (!finding) {
+    return { valid: false, reason: `No Sentinel finding published for epoch ${state.epoch}.` };
+  }
+  if (finding.epoch !== state.epoch) {
+    return {
+      valid: false,
+      reason: `Sentinel finding epoch (${finding.epoch}) does not match current epoch (${state.epoch}).`,
+    };
+  }
+  if (finding.checkoutId && finding.checkoutId !== state.scenario.checkoutId) {
+    return {
+      valid: false,
+      reason: `Sentinel finding checkoutId (${finding.checkoutId}) does not match ${state.scenario.checkoutId}.`,
+    };
+  }
+  if (finding.status !== "VERIFIED_RETURN") {
+    return {
+      valid: false,
+      reason: `Sentinel status is ${finding.status} (not VERIFIED_RETURN).`,
+    };
+  }
+  if (finding.confidence !== "HIGH") {
+    return {
+      valid: false,
+      reason: `Sentinel confidence is ${finding.confidence}; HIGH confidence is required to clear a seller deduction.`,
+    };
+  }
+  if (finding.verifiedSellerId !== "SELLER-A" && finding.verifiedSellerId !== "SELLER-B") {
+    return {
+      valid: false,
+      reason: `Sentinel verifiedSellerId (${String(finding.verifiedSellerId)}) is invalid.`,
+    };
+  }
+  if (!finding.verifiedLineId) {
+    return { valid: false, reason: "Sentinel finding is missing verifiedLineId." };
+  }
+  const matchingOrderLine = state.scenario.orderLines.find(
+    (line) =>
+      line.lineId === finding.verifiedLineId &&
+      line.sellerId === finding.verifiedSellerId &&
+      line.checkoutId === state.scenario.checkoutId,
+  );
+  if (!matchingOrderLine) {
+    return {
+      valid: false,
+      reason: `Sentinel line ${finding.verifiedLineId} does not belong to ${finding.verifiedSellerId} on ${state.scenario.checkoutId}.`,
+    };
+  }
+  const latestNote = state.getLatestWarehouseNote();
+  if (finding.evidenceNoteId !== latestNote.noteId) {
+    return {
+      valid: false,
+      reason: `Sentinel evidenceNoteId (${finding.evidenceNoteId}) does not match latest warehouse note (${latestNote.noteId}).`,
+    };
+  }
+  return { valid: true };
 }
 
 /**
  * Awaited Mozaik InterceptionHandler guarding Agent 1's `propose_refund` function_call.
  *
- * Before `propose_refund` can execute, this gate:
- * 1. Awaits Agent 2 (DisputeFulfillmentSentinel) for the latest RuntimeState epoch.
- * 2. Verifies any dispute webhook via deterministic payment-link matching:
- *    - Active verified match -> HALT (`FROZEN_DISPUTE_COLLISION`) to block an unsafe
- *      cross-system refund/payout proposal while the dispute is open.
- *    - Ambiguous partial match -> HALT (`VERIFY_DISPUTE_MATCH`) for operator verification.
- *    - Unrelated or inactive dispute -> ignored; never freezes a clean checkout.
- * 3. Checks for missing or ambiguous physical return evidence -> fail-closed hold.
- * 4. Checks for superseded evidence epochs -> blocks stale proposal & forces re-plan.
- * 5. Checks whether proposed seller debit matches Sentinel's verified warehouse seller.
+ * Before `propose_refund` can execute, this gate enforces:
+ * 1. Idempotency: blocks duplicate `propose_refund` calls once a proposal is already
+ *    accepted for the current epoch.
+ * 2. Bounded wait for Agent 2 (DisputeFulfillmentSentinel) on the latest epoch (never spins).
+ * 3. Deterministic payment-link dispute checks (`VERIFIED_ACTIVE_MATCH`, `VERIFIED_LOST_DISPUTE`,
+ *    and `AMBIGUOUS_MATCH`).
+ * 4. Deterministic money reconciliation (posted refund vs. draft refund vs. proposed amount).
+ * 5. Strict validation of BOTH Sentinel's finding (exact checkout, current epoch, HIGH confidence,
+ *    latest warehouse note ID, and verified seller/line ownership) AND RefundDesk's arguments
+ *    (exact checkout, exact amount, valid seller without draft fallback, non-future epoch).
+ * 6. Superseded epoch rejection and zero-sum wrong-seller correction via live tool-call rewrite.
  */
 export class RefundInterceptionGate implements InterceptionHandler {
   private attemptCount = 0;
   private readonly maxReplanAttempts = 3;
 
-  constructor(private readonly state: RefundGuardState) {}
+  constructor(
+    private readonly state: RefundGuardState,
+    private readonly waitTimeoutMs = 6_000,
+  ) {}
 
   isSatisfiedBy(transition: ExecutableTransition): boolean {
     if (transition.nextStateId !== "function_call") {
@@ -54,31 +127,67 @@ export class RefundInterceptionGate implements InterceptionHandler {
     this.attemptCount += 1;
     const { call, inferenceInput } = transition.input;
     const args = parseArgs(call.args);
-    const proposedSeller: SellerId =
-      args.debitSellerId === "SELLER-A" || args.debitSellerId === "SELLER-B"
-        ? args.debitSellerId
-        : this.state.scenario.draft.debitedSellerId;
-    const proposalEpoch = typeof args.epoch === "number" ? args.epoch : 1;
+
+    const rawSeller = args.debitSellerId;
+    const isValidSeller = rawSeller === "SELLER-A" || rawSeller === "SELLER-B";
+    const proposedSellerForLog: SellerId | "INVALID" = isValidSeller ? rawSeller : "INVALID";
+    const proposalEpoch =
+      typeof args.epoch === "number" && Number.isInteger(args.epoch) ? args.epoch : -1;
+
+    // 0. Prevent repeat/duplicate proposals once already accepted for this epoch
+    if (
+      this.state.acceptedProposal !== null &&
+      this.state.acceptedProposal.epoch === this.state.epoch
+    ) {
+      const detail = `Blocked duplicate propose_refund call at epoch ${this.state.epoch}: proposal for ${this.state.acceptedProposal.debitSellerId} was already accepted for this epoch.`;
+      this.recordInterception({
+        blockedSellerId: proposedSellerForLog,
+        proposalEpoch,
+        currentEpoch: this.state.epoch,
+        reason: "DUPLICATE_PROPOSAL_BLOCKED",
+        detail,
+        actionTaken: "HALT_FOR_HUMAN_REVIEW",
+        citedSourceIds: this.state.acceptedProposal.citedSourceIds,
+      });
+      return {
+        nextStateId: "model_message",
+        input: {
+          answer: ModelMessageItem.rehydrate({
+            text: `Proposal already accepted for epoch ${this.state.epoch} (${this.state.acceptedProposal.debitSellerId}); duplicate propose_refund blocked.`,
+          }),
+        },
+      };
+    }
 
     this.state.recordEvent(
       "interception.inspecting",
       "RefundInterceptionGate",
-      `Intercepted propose_refund(debit=${proposedSeller}, epoch=${proposalEpoch}) before execution; awaiting Sentinel verification for epoch ${this.state.epoch}.`,
-      { proposedSeller, proposalEpoch, currentEpoch: this.state.epoch },
+      `Intercepted propose_refund(debit=${proposedSellerForLog}, epoch=${proposalEpoch}) before execution; awaiting Sentinel verification for epoch ${this.state.epoch}.`,
+      { proposedSeller: proposedSellerForLog, proposalEpoch, currentEpoch: this.state.epoch },
     );
 
-    // Wait for Sentinel's finding on the latest epoch (and re-check if epoch bumps while waiting).
-    let finding = await this.state.waitForSentinelForCurrentEpoch();
-    while (finding && finding.epoch < this.state.epoch) {
-      finding = await this.state.waitForSentinelForCurrentEpoch();
+    // Bounded wait for Sentinel's finding on the latest epoch (never infinite loop).
+    let finding: SentinelFinding | null = null;
+    for (let round = 0; round < 3; round += 1) {
+      finding = await this.state.waitForSentinelForCurrentEpoch(this.waitTimeoutMs);
+      if (finding && finding.epoch === this.state.epoch) {
+        break;
+      }
+      if (!finding) {
+        break;
+      }
     }
 
     const currentEpoch = this.state.epoch;
     const relevantDispute = this.state.getLatestRelevantChargeback();
 
-    // 1A. Verified active dispute linked to this payment -> block unsafe cross-system refund proposal
-    if (relevantDispute?.evaluation.matchState === "VERIFIED_ACTIVE_MATCH") {
+    // 1A. Verified active OR prior lost dispute linked to this payment -> hard freeze
+    if (
+      relevantDispute?.evaluation.matchState === "VERIFIED_ACTIVE_MATCH" ||
+      relevantDispute?.evaluation.matchState === "VERIFIED_LOST_DISPUTE"
+    ) {
       const { chargeback, evaluation } = relevantDispute;
+      const isLost = evaluation.matchState === "VERIFIED_LOST_DISPUTE";
       const cited = Array.from(
         new Set([
           chargeback.disputeId,
@@ -86,12 +195,16 @@ export class RefundInterceptionGate implements InterceptionHandler {
           ...this.state.scenario.settlements.map((s) => s.settlementId),
         ]),
       );
-      const detail = `Blocked unsafe cross-system refund/payout proposal (KSh ${this.state.scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")}): ${evaluation.reason}`;
+      const detail = isLost
+        ? `Blocked refund proposal (KSh ${this.state.scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")}): ${evaluation.reason}`
+        : `Blocked unsafe cross-system refund/payout proposal (KSh ${this.state.scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")}): ${evaluation.reason}`;
       this.recordInterception({
-        blockedSellerId: proposedSeller,
+        blockedSellerId: proposedSellerForLog,
         proposalEpoch,
         currentEpoch,
-        reason: "UNSAFE_CROSS_SYSTEM_REFUND_BLOCKED",
+        reason: isLost
+          ? "PRIOR_DISPUTE_LOST_BLOCKED"
+          : "UNSAFE_CROSS_SYSTEM_REFUND_BLOCKED",
         detail,
         actionTaken: "HALT_FOR_HUMAN_REVIEW",
         citedSourceIds: cited,
@@ -100,7 +213,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
       return this.haltForHumanReview("FROZEN_DISPUTE_COLLISION", detail, cited);
     }
 
-    // 1B. Ambiguous dispute match -> ask human operator to verify linkage before releasing funds
+    // 1B. Ambiguous or conflicting dispute signals -> ask human operator to verify
     if (
       relevantDispute?.evaluation.matchState === "AMBIGUOUS_MATCH" ||
       finding?.status === "DISPUTE_AMBIGUOUS"
@@ -118,7 +231,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
         relevantDispute?.evaluation.reason ??
         `Dispute ${disputeId} partially matches ${this.state.scenario.checkoutId}; operator verification required before approving payout.`;
       this.recordInterception({
-        blockedSellerId: proposedSeller,
+        blockedSellerId: proposedSellerForLog,
         proposalEpoch,
         currentEpoch,
         reason: "AMBIGUOUS_DISPUTE_MATCH",
@@ -130,24 +243,99 @@ export class RefundInterceptionGate implements InterceptionHandler {
       return this.haltForHumanReview("VERIFY_DISPUTE_MATCH", detail, cited);
     }
 
-    // 2. Missing or ambiguous physical return evidence -> HALT fail-closed
-    if (!finding || finding.status === "MISSING_OR_AMBIGUOUS" || !finding.verifiedSellerId) {
-      const cited = finding?.citedSourceIds ?? [this.state.getLatestWarehouseNote().noteId];
-      const detail = `Fail-closed hold: warehouse record ${this.state.getLatestWarehouseNote().noteId} does not verify physical receipt of a specific seller SKU for ${this.state.scenario.checkoutId}. Refusing to debit ${proposedSeller} without verified return evidence.`;
+    // 2. Deterministic money reconciliation check on source settlements & draft
+    const sourceRecon = checkMoneyReconciliation(this.state.scenario);
+    if (!sourceRecon.ok) {
+      const cited = [
+        this.state.scenario.draft.draftId,
+        ...this.state.scenario.settlements.map((s) => s.settlementId),
+      ];
+      const detail = `Money reconciliation mismatch blocked clearance: ${sourceRecon.error}`;
       this.recordInterception({
-        blockedSellerId: proposedSeller,
+        blockedSellerId: proposedSellerForLog,
         proposalEpoch,
         currentEpoch,
-        reason: "MISSING_EVIDENCE",
+        reason: "RECONCILIATION_MISMATCH",
         detail,
         actionTaken: "HALT_FOR_HUMAN_REVIEW",
         citedSourceIds: cited,
       });
-      this.state.verdict = "HOLD_MISSING_EVIDENCE";
-      return this.haltForHumanReview("HOLD_MISSING_EVIDENCE", detail, cited);
+      this.state.verdict = "HOLD_RECONCILIATION_MISMATCH";
+      return this.haltForHumanReview("HOLD_RECONCILIATION_MISMATCH", detail, cited);
     }
 
-    // 3. Superseded evidence epoch -> REJECT stale proposal & force re-plan on current epoch
+    // 3. Validate Sentinel finding strictly (never blindly trust unverified/stale/invented fields)
+    const findingCheck = validateSentinelFindingForClearance(this.state, finding);
+    if (!findingCheck.valid || !finding || !finding.verifiedSellerId) {
+      const isMissingStatus = !finding || finding.status === "MISSING_OR_AMBIGUOUS";
+      const cited = Array.from(
+        new Set([
+          this.state.getLatestWarehouseNote().noteId,
+          ...(finding?.citedSourceIds ?? []),
+        ]),
+      );
+      const detail = isMissingStatus
+        ? `Fail-closed hold: warehouse record ${this.state.getLatestWarehouseNote().noteId} does not verify physical receipt of a specific seller SKU for ${this.state.scenario.checkoutId}. (${findingCheck.reason ?? "missing evidence"})`
+        : `Fail-closed hold: Sentinel finding rejected by gate validation (${findingCheck.reason}). Refusing to debit ${proposedSellerForLog}.`;
+      this.recordInterception({
+        blockedSellerId: proposedSellerForLog,
+        proposalEpoch,
+        currentEpoch,
+        reason: isMissingStatus ? "MISSING_EVIDENCE" : "INVALID_PROPOSAL_OR_FINDING",
+        detail,
+        actionTaken: "HALT_FOR_HUMAN_REVIEW",
+        citedSourceIds: cited,
+      });
+      this.state.verdict =
+        !finding && this.state.revalidationRequestedForEpoch !== null
+          ? "PENDING_REVALIDATION"
+          : "HOLD_MISSING_EVIDENCE";
+      return this.haltForHumanReview(this.state.verdict, detail, cited);
+    }
+
+    // 4. Validate RefundDesk proposal arguments strictly (no silent fallback to draft seller!)
+    const proposedCheckoutId =
+      typeof args.checkoutId === "string" ? args.checkoutId.trim() : "";
+    const proposedAmountKsh =
+      typeof args.refundAmountKsh === "number" ? args.refundAmountKsh : NaN;
+    const argErrors: string[] = [];
+    if (proposedCheckoutId !== this.state.scenario.checkoutId) {
+      argErrors.push(
+        `checkoutId "${proposedCheckoutId}" != "${this.state.scenario.checkoutId}"`,
+      );
+    }
+    if (!isValidSeller) {
+      argErrors.push(`invalid debitSellerId "${String(rawSeller)}"`);
+    }
+    if (proposedAmountKsh !== sourceRecon.expectedRefundKsh) {
+      argErrors.push(
+        `refundAmountKsh (${String(args.refundAmountKsh)}) != expected (${sourceRecon.expectedRefundKsh})`,
+      );
+    }
+    if (proposalEpoch < 1 || proposalEpoch > currentEpoch) {
+      argErrors.push(`invalid epoch (${proposalEpoch}) vs current epoch (${currentEpoch})`);
+    }
+    if (argErrors.length > 0) {
+      const detail = `Invalid propose_refund payload rejected by gate: ${argErrors.join("; ")}.`;
+      this.recordInterception({
+        blockedSellerId: proposedSellerForLog,
+        proposalEpoch,
+        currentEpoch,
+        reason: "INVALID_PROPOSAL_OR_FINDING",
+        detail,
+        actionTaken: "HALT_FOR_HUMAN_REVIEW",
+        citedSourceIds: finding.citedSourceIds,
+      });
+      this.state.verdict =
+        proposedAmountKsh !== sourceRecon.expectedRefundKsh
+          ? "HOLD_RECONCILIATION_MISMATCH"
+          : "HOLD_MISSING_EVIDENCE";
+      return this.haltForHumanReview(this.state.verdict, detail, finding.citedSourceIds);
+    }
+
+    const proposedSeller: SellerId = rawSeller as SellerId;
+
+    // 5. Superseded evidence epoch -> REJECT stale proposal & force re-plan on current epoch
     if (proposalEpoch < currentEpoch) {
       const detail = `Rejected superseded proposal (epoch ${proposalEpoch} < current epoch ${currentEpoch}). Late update ${finding.evidenceNoteId} establishes ${finding.verifiedSellerId} (${finding.verifiedLineId}) is liable. Re-plan on epoch ${currentEpoch}.`;
       this.recordInterception({
@@ -166,11 +354,12 @@ export class RefundInterceptionGate implements InterceptionHandler {
         detail,
         finding.verifiedSellerId,
         currentEpoch,
+        sourceRecon.expectedRefundKsh,
         finding.citedSourceIds,
       );
     }
 
-    // 4. Wrong-seller allocation (zero-sum trap) -> REJECT & rewrite with Sentinel's verified seller
+    // 6. Wrong-seller allocation (zero-sum trap) -> REJECT & rewrite with Sentinel's verified seller
     if (proposedSeller !== finding.verifiedSellerId) {
       const detail = `Zero-sum misallocation blocked: draft/proposal charged ${proposedSeller}, but Sentinel verified return of ${finding.verifiedLineId} belonging to ${finding.verifiedSellerId} (${finding.evidenceNoteId}). Total remains KSh ${this.state.scenario.draft.totalBatchSettlementKsh.toLocaleString("en-KE")}, but seller deduction must move to ${finding.verifiedSellerId}.`;
       this.recordInterception({
@@ -189,15 +378,16 @@ export class RefundInterceptionGate implements InterceptionHandler {
         detail,
         finding.verifiedSellerId,
         currentEpoch,
+        sourceRecon.expectedRefundKsh,
         finding.citedSourceIds,
       );
     }
 
-    // 5. All checks passed! Allow `propose_refund` to execute.
+    // 7. All checks passed! Allow `propose_refund` to execute.
     this.state.recordEvent(
       "interception.cleared",
       "RefundInterceptionGate",
-      `Cleared propose_refund(debit=${proposedSeller}, epoch=${currentEpoch}): matches Sentinel finding (${finding.evidenceNoteId}, ${finding.verifiedLineId}) with zero active linked disputes.`,
+      `Cleared propose_refund(debit=${proposedSeller}, amount=KSh ${sourceRecon.expectedRefundKsh.toLocaleString("en-KE")}, epoch=${currentEpoch}): matches Sentinel finding (${finding.evidenceNoteId}, ${finding.verifiedLineId}) with reconciled totals and zero blocking disputes.`,
       {
         approvedSellerId: proposedSeller,
         epoch: currentEpoch,
@@ -208,7 +398,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
   }
 
   private recordInterception(input: {
-    blockedSellerId: SellerId;
+    blockedSellerId: SellerId | "INVALID";
     proposalEpoch: number;
     currentEpoch: number;
     reason: InterceptionReason;
@@ -244,6 +434,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
     detail: string,
     verifiedSellerId: SellerId,
     currentEpoch: number,
+    expectedRefundKsh: number,
     citedSourceIds: readonly string[],
   ): ExecutableTransition {
     if (this.attemptCount >= this.maxReplanAttempts) {
@@ -266,6 +457,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
         reason,
         currentEpoch,
         verifiedSellerId,
+        expectedRefundKsh,
         citedSourceIds,
         detail,
       }),
@@ -282,7 +474,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
         content: [
           `INTERCEPTION_FEEDBACK (${reason}):`,
           detail,
-          `MANDATORY CORRECTION: Call propose_refund again with debitSellerId="${verifiedSellerId}", epoch=${currentEpoch}, checkoutId="${this.state.scenario.checkoutId}", refundAmountKsh=${this.state.scenario.draft.refundAmountKsh}, citing [${citedSourceIds.join(", ")}].`,
+          `MANDATORY CORRECTION: Call propose_refund ONCE with debitSellerId="${verifiedSellerId}", epoch=${currentEpoch}, checkoutId="${this.state.scenario.checkoutId}", refundAmountKsh=${expectedRefundKsh}, citing [${citedSourceIds.join(", ")}]. After it is accepted, stop and summarize without calling propose_refund again.`,
         ].join("\n"),
         input: updatedInput,
       },
@@ -290,7 +482,7 @@ export class RefundInterceptionGate implements InterceptionHandler {
   }
 
   private haltForHumanReview(
-    verdict: "HOLD_MISSING_EVIDENCE" | "FROZEN_DISPUTE_COLLISION" | "VERIFY_DISPUTE_MATCH",
+    verdict: Exclude<FinalVerdict, "READY_FOR_HUMAN_APPROVAL" | "CORRECTED_READY_FOR_APPROVAL">,
     detail: string,
     citedSourceIds: readonly string[],
   ): ExecutableTransition {

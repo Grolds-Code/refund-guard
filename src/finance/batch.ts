@@ -320,9 +320,9 @@ export const BLACK_FRIDAY_BATCH_CHECKOUTS: readonly ScenarioFixture[] = [
         paymentSettlementId: "STL-PAY-741",
         cardLast4: "7784",
         amountKsh: 12_000,
-        reasonCode: "VISA_13.1_MERCHANDISE_NOT_RECEIVED",
+        reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
         narrative:
-          "Active issuing-bank dispute opened on card ending 7784 for KSh 12,000 (checkout ref ending 741, settlement STL-PAY-741).",
+          "Active issuing-bank dispute opened on card ending 7784 for KSh 12,000 (checkout ref ending 741, settlement STL-PAY-741): cardholder disputes defective espresso tamper charge while requesting refund.",
       },
     },
   },

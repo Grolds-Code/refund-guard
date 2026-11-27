@@ -235,7 +235,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
     title: "4. Late Warehouse Correction Mid-Flight (Epoch Invalidation)",
     shortLabel: "Mid-Flight Correction",
     summary:
-      "Initial note tentatively names Seller B's footwear box, so Agent 1 starts approving Seller B. Mid-flight, QC opens the box, finds Seller A's jacket, bumps epoch 1->2, and the interceptor rejects the stale approval.",
+      "Initial exterior barcode scan logs Seller B's footwear box, so Agent 1 starts approving Seller B. Mid-flight, QC opens the box, finds Seller A's jacket, bumps epoch 1->2, and the interceptor rejects the stale approval.",
     policySummary: POLICY_SUMMARY,
     batchId: "BATCH-BF-2026-01",
     checkoutId: "CHK-402",
@@ -277,7 +277,7 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
       noteId: "WH-404-V1",
       receivedAt: "2026-11-26T14:22:00+03:00",
       hub: "Kisumu Returns Hub",
-      text: "Preliminary dock scan CHK-402: Rift Valley Footwear shoebox received on belt (tentative Tan Chelsea Boots, Seller B). Pending bench open.",
+      text: "Dock scan logged for CHK-402: checked in 1x Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear / Seller B) from exterior box barcode; routed to Seller B return bin.",
     },
     midFlightInjection: {
       delayMs: 110,
@@ -351,9 +351,9 @@ export const SCENARIOS: readonly ScenarioFixture[] = [
         paymentSettlementId: "STL-PAY-402",
         cardLast4: "4421",
         amountKsh: 10_000,
-        reasonCode: "VISA_13.1_MERCHANDISE_NOT_RECEIVED",
+        reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
         narrative:
-          "Active issuing-bank dispute opened on card ending 4421 for KSh 10,000 (merchant checkout ref ending 402, settlement STL-PAY-402): cardholder disputes navy jacket charge while requesting store refund.",
+          "Active issuing-bank dispute opened on card ending 4421 for KSh 10,000 (merchant checkout ref ending 402, settlement STL-PAY-402): cardholder disputes defective navy jacket charge while requesting store refund.",
       },
     },
   },

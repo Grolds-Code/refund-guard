@@ -1,15 +1,16 @@
 import { defineRuntime, RuntimeState, type SemanticEvent } from "@mozaik-ai/core";
 import { evaluateDisputeLink } from "../finance/dispute-match.js";
-import type {
-  ChargebackWebhookRecord,
-  DisputeMatchEvaluation,
-  FinalVerdict,
-  InterceptionRecord,
-  ProposedRefundAction,
-  ScenarioFixture,
-  SentinelFinding,
-  TimelineEntry,
-  WarehouseNoteRecord,
+import {
+  isVerdictApprovable,
+  type ChargebackWebhookRecord,
+  type DisputeMatchEvaluation,
+  type FinalVerdict,
+  type InterceptionRecord,
+  type ProposedRefundAction,
+  type ScenarioFixture,
+  type SentinelFinding,
+  type TimelineEntry,
+  type WarehouseNoteRecord,
 } from "../finance/types.js";
 
 export type TimelineListener = (entry: TimelineEntry) => void;
@@ -63,6 +64,7 @@ export class RefundGuardState extends RuntimeState {
       this.lastDisputeEvaluation = evaluation;
       if (
         evaluation.matchState === "VERIFIED_ACTIVE_MATCH" ||
+        evaluation.matchState === "VERIFIED_LOST_DISPUTE" ||
         evaluation.matchState === "AMBIGUOUS_MATCH"
       ) {
         this.chargebacks.push(scenario.initialChargeback);
@@ -109,18 +111,42 @@ export class RefundGuardState extends RuntimeState {
     chargeback: ChargebackWebhookRecord;
     evaluation: DisputeMatchEvaluation;
   } | null {
+    let fallbackAmbiguous: {
+      chargeback: ChargebackWebhookRecord;
+      evaluation: DisputeMatchEvaluation;
+    } | null = null;
+
     for (let i = this.chargebacks.length - 1; i >= 0; i -= 1) {
       const cb = this.chargebacks[i];
       const evaluation = evaluateDisputeLink(this.scenario, cb);
       if (
         evaluation.matchState === "VERIFIED_ACTIVE_MATCH" ||
-        evaluation.matchState === "AMBIGUOUS_MATCH"
+        evaluation.matchState === "VERIFIED_LOST_DISPUTE"
       ) {
         this.lastDisputeEvaluation = evaluation;
         return { chargeback: cb, evaluation };
       }
+      if (evaluation.matchState === "AMBIGUOUS_MATCH" && !fallbackAmbiguous) {
+        fallbackAmbiguous = { chargeback: cb, evaluation };
+      }
+    }
+    if (fallbackAmbiguous) {
+      this.lastDisputeEvaluation = fallbackAmbiguous.evaluation;
+      return fallbackAmbiguous;
     }
     return null;
+  }
+
+  private upsertChargeback(chargeback: ChargebackWebhookRecord): boolean {
+    const existingIdx = this.chargebacks.findIndex(
+      (c) => c.disputeId === chargeback.disputeId,
+    );
+    if (existingIdx >= 0) {
+      this.chargebacks[existingIdx] = chargeback;
+      return true;
+    }
+    this.chargebacks.push(chargeback);
+    return false;
   }
 
   private invalidatePriorReadiness(reason: string): boolean {
@@ -129,9 +155,7 @@ export class RefundGuardState extends RuntimeState {
       this.supersededProposals.push(this.acceptedProposal);
       this.acceptedProposal = null;
     }
-    const hadReadyVerdict =
-      this.verdict === "READY_FOR_HUMAN_APPROVAL" ||
-      this.verdict === "CORRECTED_READY_FOR_APPROVAL";
+    const hadReadyVerdict = this.verdict !== null && isVerdictApprovable(this.verdict);
     if (hadAccepted || hadReadyVerdict) {
       this.verdict = null;
       this.revalidationRequestedForEpoch = this.epoch;
@@ -173,10 +197,53 @@ export class RefundGuardState extends RuntimeState {
     const evaluation = evaluateDisputeLink(this.scenario, chargeback);
     this.lastDisputeEvaluation = evaluation;
 
-    if (
-      evaluation.matchState === "UNRELATED" ||
-      evaluation.matchState === "INACTIVE"
-    ) {
+    if (evaluation.matchState === "INACTIVE") {
+      const existingIdx = this.chargebacks.findIndex(
+        (c) => c.disputeId === chargeback.disputeId,
+      );
+      if (existingIdx >= 0) {
+        // Apply closure (CLOSED_WON / WITHDRAWN) directly to the original dispute record
+        // so the superseded OPEN record no longer blocks clearance.
+        this.chargebacks[existingIdx] = chargeback;
+        this.epoch += 1;
+        this.recordEvent(
+          "evidence.chargeback_closed",
+          "PSPWebhook",
+          `Dispute ${chargeback.disputeId} updated to ${chargeback.status} (epoch -> ${this.epoch}); original OPEN dispute cleared.`,
+          {
+            disputeId: chargeback.disputeId,
+            status: chargeback.status,
+            matchState: evaluation.matchState,
+            epoch: this.epoch,
+          },
+        );
+        return {
+          relevant: true,
+          epoch: this.epoch,
+          evaluation,
+          invalidatedPriorApproval: false,
+        };
+      }
+
+      this.recordEvent(
+        "evidence.chargeback_ignored",
+        "PSPWebhook",
+        `Ignored dispute ${chargeback.disputeId} (${evaluation.matchState}): ${evaluation.reason}`,
+        {
+          disputeId: chargeback.disputeId,
+          matchState: evaluation.matchState,
+          mismatchedSignals: evaluation.mismatchedSignals,
+        },
+      );
+      return {
+        relevant: false,
+        epoch: this.epoch,
+        evaluation,
+        invalidatedPriorApproval: false,
+      };
+    }
+
+    if (evaluation.matchState === "UNRELATED") {
       this.recordEvent(
         "evidence.chargeback_ignored",
         "PSPWebhook",
@@ -196,7 +263,7 @@ export class RefundGuardState extends RuntimeState {
     }
 
     this.epoch += 1;
-    this.chargebacks.push(chargeback);
+    this.upsertChargeback(chargeback);
     const invalidatedPriorApproval = this.invalidatePriorReadiness(
       `dispute ${chargeback.disputeId} (${evaluation.matchState}) arrived for ${this.scenario.checkoutId}`,
     );
@@ -256,7 +323,7 @@ export class RefundGuardState extends RuntimeState {
     return null;
   }
 
-  async waitForSentinelForCurrentEpoch(timeoutMs = 8_000): Promise<SentinelFinding | null> {
+  async waitForSentinelForCurrentEpoch(timeoutMs = 6_000): Promise<SentinelFinding | null> {
     const targetEpoch = this.epoch;
     const existing = this.sentinelFindings.get(targetEpoch);
     if (existing) {
@@ -265,14 +332,22 @@ export class RefundGuardState extends RuntimeState {
 
     return new Promise<SentinelFinding | null>((resolve) => {
       const timer = setTimeout(() => {
-        resolve(this.sentinelFindings.get(this.epoch) ?? this.getMostRecentAnyEpochFinding());
+        const list = this.epochWaiters.get(targetEpoch);
+        if (list) {
+          const next = list.filter((fn) => fn !== onFinding);
+          if (next.length === 0) this.epochWaiters.delete(targetEpoch);
+          else this.epochWaiters.set(targetEpoch, next);
+        }
+        resolve(this.sentinelFindings.get(targetEpoch) ?? null);
       }, timeoutMs);
 
-      const list = this.epochWaiters.get(targetEpoch) ?? [];
-      list.push((finding) => {
+      const onFinding = (finding: SentinelFinding) => {
         clearTimeout(timer);
         resolve(finding);
-      });
+      };
+
+      const list = this.epochWaiters.get(targetEpoch) ?? [];
+      list.push(onFinding);
       this.epochWaiters.set(targetEpoch, list);
     });
   }

@@ -18,7 +18,7 @@ class WhenEvidenceNeedsAudit extends SituationSpecification {
 }
 
 const SENTINEL_INSTRUCTION =
-  "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and asynchronous issuing-bank dispute webhooks. Only flag DISPUTE_COLLISION when an OPEN dispute matches the original payment (card last-4, checkout/settlement ref, and amount within capture). If a dispute only partially matches the payment, publish status=DISPUTE_AMBIGUOUS for human verification. Ignore unrelated or closed disputes. Otherwise determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived or contents are unverified/ambiguous, publish status=MISSING_OR_AMBIGUOUS. Always call `publish_sentinel_finding` with the exact CURRENT_EPOCH and source IDs.";
+  "You are the Dispute & Fulfillment Sentinel Agent running concurrently with the Refund Desk Agent. Parse unstructured warehouse return notes and issuing-bank dispute webhooks. Flag DISPUTE_COLLISION when an OPEN or CLOSED_LOST dispute is verified against the original payment (matching card last-4, explicit paymentSettlementId, no conflicting reference, and amount within capture). Flag DISPUTE_AMBIGUOUS when signals partially overlap or conflict. Ignore unrelated, CLOSED_WON, or WITHDRAWN disputes. Otherwise determine which exact seller line item physically arrived back at the warehouse; if no parcel arrived, contents are tentative/pending/unverified, or both items are ambiguously returned, publish status=MISSING_OR_AMBIGUOUS with confidence=LOW. Always call `publish_sentinel_finding` ONCE with the exact CURRENT_EPOCH, CHECKOUT_ID, latest WAREHOUSE_NOTE_ID, and source IDs, then reply briefly without calling the tool again.";
 
 export function createSentinelAgent(
   runtime: RefundGuardRuntimeApi,
@@ -35,6 +35,7 @@ export function createSentinelAgent(
       type: "object",
       properties: {
         epoch: { type: "number" },
+        checkoutId: { type: "string" },
         status: {
           type: "string",
           enum: [
@@ -57,6 +58,7 @@ export function createSentinelAgent(
       },
       required: [
         "epoch",
+        "checkoutId",
         "status",
         "verifiedSellerId",
         "verifiedLineId",
@@ -70,6 +72,7 @@ export function createSentinelAgent(
     },
     invoke: async (args: {
       epoch: number;
+      checkoutId?: string;
       status: SentinelEvidenceStatus;
       verifiedSellerId: SellerId | "NONE" | null;
       verifiedLineId: string | null;
@@ -90,6 +93,7 @@ export function createSentinelAgent(
 
       const finding = {
         epoch: args.epoch,
+        checkoutId: args.checkoutId?.trim() || state.scenario.checkoutId,
         status: args.status,
         verifiedSellerId: normalizedSeller,
         verifiedLineId: normalizedLine,
@@ -117,7 +121,7 @@ export function createSentinelAgent(
         const s = state.scenario;
 
         const prompt = [
-          "Audit the latest physical warehouse intake notes and any linked PSP dispute webhooks, then call `publish_sentinel_finding`.",
+          "Audit the latest physical warehouse intake notes and any linked PSP dispute webhooks, then call `publish_sentinel_finding` once.",
           `TRIGGER_EVENT: ${event.type}`,
           `CURRENT_EPOCH: ${targetEpoch}`,
           `CHECKOUT_ID: ${s.checkoutId}`,
@@ -149,7 +153,7 @@ export function createSentinelAgent(
               ].join("\n")
             : "NONE",
           "END_EVIDENCE",
-          "Call publish_sentinel_finding now with exact source IDs (use 'NONE' for inapplicable IDs).",
+          "Call publish_sentinel_finding now with exact checkoutId, epoch, and source IDs (use 'NONE' for inapplicable IDs).",
         ].join("\n");
 
         state.notifySentinelLoopStarted();

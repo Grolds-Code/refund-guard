@@ -927,7 +927,7 @@
           <div class="live-interrupt-box">
             <label class="checkbox-row" style="margin-bottom:8px;">
               <input id="slowDemoToggle" type="checkbox" />
-              <span>Live Interrupt Window (~2.4s to click mid-run)</span>
+              <span>Slow-Mo Window (~2.4s mid-run; buttons also work post-run)</span>
             </label>
             <div class="interrupt-btns">
               <button id="liveCorrBtn" type="button" class="btn btn-interrupt" disabled>Interrupt: QC -> A</button>
@@ -978,15 +978,16 @@
             <div class="operator-bar">
               <span id="operatorStatus" class="status-tag">Operator decision: pending</span>
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="APPROVED_FOR_RELEASE">Approve Release</button>
+                <button id="approveReleaseBtn" type="button" class="btn btn-ghost btn-sm op-btn" data-op="APPROVED_FOR_RELEASE" disabled>Approve Release</button>
                 <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="HELD_IN_RESERVE">Hold Reserve</button>
                 <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="REJECTED">Reject Draft</button>
               </div>
             </div>
+            <div id="operatorNotice" class="hidden" style="margin-top:8px; padding:8px 10px; border-radius:6px; font-family:var(--mono); font-size:11.5px; background:var(--rose-soft); color:var(--rose); border:1px solid rgba(251,113,133,0.3);"></div>
 
-            <details open style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px;">
+            <details id="sourceDetails" style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px;">
               <summary style="cursor:pointer; font-size:12px; color:var(--ink); font-weight:500;">
-                Source Evidence Records (Settlements, Order Lines, Warehouse Notes &amp; Disputes)
+                Source Evidence Records (Click to inspect Settlements, Order Lines, Warehouse Notes &amp; Disputes)
               </summary>
               <div id="sourceCards" class="source-grid"></div>
             </details>
@@ -1022,7 +1023,7 @@
 
         <section id="benchmarkCard" class="surface benchmark-card">
           <div class="card-head">
-            <h2 class="card-title">5-Case Benchmark: Ticket+Draft vs. 1-Agent Snapshot (Same t=0) vs. RefundGuard</h2>
+            <h2 class="card-title">5-Case Benchmark: Ticket+Draft vs. t=0 Snapshot vs. Live-Evidence RefundGuard</h2>
             <span id="benchmarkSummary" class="status-tag ok">5/5 verified</span>
           </div>
           <div class="card-body">
@@ -1032,7 +1033,7 @@
                   <tr>
                     <th>Scenario</th>
                     <th>Ticket+Draft</th>
-                    <th>1-Agent Snapshot</th>
+                    <th>t=0 Snapshot</th>
                     <th>RefundGuard</th>
                     <th>Overlap</th>
                   </tr>
@@ -1051,21 +1052,21 @@
     <div class="scenario-strip">
       <div>
         <div style="font-size:15px; font-weight:600;">Black Friday Settlement Batch: BATCH-BF-2026-01</div>
-        <div style="font-size:12.5px; color:var(--ink-2);">4 distinct multi-seller checkouts (8 Kenyan sellers) audited concurrently by 8 Mozaik agent loops.</div>
+        <div style="font-size:12.5px; color:var(--ink-2);">4 concurrent checkout reviews (8 Kenyan sellers; 2 overlapping Mozaik agent loops inside each checkout). All payouts start pending human sign-off.</div>
       </div>
       <button id="runBatchBtn" class="btn btn-primary">Run 4-Checkout Batch Audit</button>
     </div>
 
     <div class="kpi-grid-4">
       <div class="surface kpi">
-        <span class="eyebrow">Concurrent Agent Loops</span>
-        <div id="batchLoopsVal" class="kpi-val mono">8 loops / 4 checkouts</div>
-        <div id="batchOverlapSub" class="kpi-sub">Click Run to verify concurrent overlap across all checkouts.</div>
+        <span class="eyebrow">Checkout Reviews</span>
+        <div id="batchLoopsVal" class="kpi-val mono">4 checkouts (2 loops each)</div>
+        <div id="batchOverlapSub" class="kpi-sub">Click Run to measure concurrent overlap within each checkout.</div>
       </div>
       <div class="surface kpi">
         <span class="eyebrow">Operator Approved Release</span>
         <div id="batchApprovedVal" class="kpi-val mono">KSh 0</div>
-        <div id="batchApprovedSub" class="kpi-sub">Updates live as you approve or hold exceptions below.</div>
+        <div id="batchApprovedSub" class="kpi-sub">Starts at KSh 0; only eligible verdicts can be approved.</div>
       </div>
       <div class="surface kpi">
         <span class="eyebrow">Held in Reserve / Blocked</span>
@@ -1159,6 +1160,8 @@
       baselineBadge: document.getElementById("baselineBadge"),
       holdPolicyLine: document.getElementById("holdPolicyLine"),
       operatorStatus: document.getElementById("operatorStatus"),
+      approveReleaseBtn: document.getElementById("approveReleaseBtn"),
+      operatorNotice: document.getElementById("operatorNotice"),
       sourceCards: document.getElementById("sourceCards"),
       gateBox: document.getElementById("gateBox"),
       eventFeed: document.getElementById("eventFeed"),
@@ -1173,6 +1176,14 @@
       batchStatusTag: document.getElementById("batchStatusTag"),
       batchBody: document.getElementById("batchBody"),
     };
+
+    function isApprovableVerdict(verdict, reconciliationMatched = true) {
+      return (
+        reconciliationMatched &&
+        (verdict === "READY_FOR_HUMAN_APPROVAL" ||
+          verdict === "CORRECTED_READY_FOR_APPROVAL")
+      );
+    }
 
     function fmtKsh(n) {
       const sign = n < 0 ? "-" : "";
@@ -1367,17 +1378,40 @@
       els.sourceCards.innerHTML = cards.join("");
     }
 
-    function setOperatorDecision(decision) {
+    function showOperatorNotice(message, tone = "danger") {
+      if (!message) {
+        els.operatorNotice.classList.add("hidden");
+        els.operatorNotice.textContent = "";
+        return;
+      }
+      els.operatorNotice.classList.remove("hidden");
+      if (tone === "warn") {
+        els.operatorNotice.style.background = "var(--amber-soft)";
+        els.operatorNotice.style.color = "var(--amber)";
+        els.operatorNotice.style.borderColor = "rgba(251,191,36,0.32)";
+      } else {
+        els.operatorNotice.style.background = "var(--rose-soft)";
+        els.operatorNotice.style.color = "var(--rose)";
+        els.operatorNotice.style.borderColor = "rgba(251,113,133,0.32)";
+      }
+      els.operatorNotice.textContent = message;
+    }
+
+    function renderOperatorDecisionBadge(decision) {
       const cls =
         decision === "APPROVED_FOR_RELEASE"
           ? "ok"
           : decision === "HELD_IN_RESERVE"
             ? "warn"
-            : decision === "REJECTED"
+            : decision === "REJECTED" || decision === "BLOCKED_409"
               ? "danger"
               : "";
       els.operatorStatus.className = `status-tag ${cls}`;
-      els.operatorStatus.textContent = `Operator decision: ${decision.replace(/_/g, " ").toLowerCase()}`;
+      const label =
+        decision === "BLOCKED_409"
+          ? "approval blocked (409 conflict)"
+          : decision.replace(/_/g, " ").toLowerCase();
+      els.operatorStatus.textContent = `Operator decision: ${label}`;
       for (const btn of document.querySelectorAll(".op-btn")) {
         btn.classList.remove("selected-ok", "selected-warn", "selected-danger");
         if (btn.dataset.op === decision) {
@@ -1392,10 +1426,57 @@
       }
     }
 
+    async function submitOperatorDecision(decision) {
+      if (!state.lastBundle || !state.activeSessionId) return;
+      const report = state.lastBundle.report;
+      if (
+        decision === "APPROVED_FOR_RELEASE" &&
+        !isApprovableVerdict(report.verdict, report.ledger.reconciliationMatched)
+      ) {
+        showOperatorNotice(
+          `Blocked: cannot approve release while verdict is ${report.verdict}.`,
+        );
+        renderOperatorDecisionBadge("BLOCKED_409");
+        return;
+      }
+
+      const res = await fetch(`/api/sessions/${state.activeSessionId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          epoch: report.finalEpoch,
+          decision,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showOperatorNotice(data.error || `HTTP ${res.status}: approval rejected.`);
+        renderOperatorDecisionBadge("BLOCKED_409");
+        if (data.currentEpoch) {
+          els.epochTag.className = "status-tag danger";
+          els.epochTag.textContent = `epoch ${data.currentEpoch} (expired)`;
+        }
+        return;
+      }
+
+      showOperatorNotice("");
+      renderOperatorDecisionBadge(data.decision);
+    }
+
     function renderReport(payload) {
       const { report, baseline, sourceRecords } = payload;
       state.lastBundle = payload;
+      if (payload.sessionId) {
+        state.activeSessionId = payload.sessionId;
+      }
       els.downloadBtn.disabled = false;
+      showOperatorNotice("");
+
+      const approvable = isApprovableVerdict(
+        report.verdict,
+        report.ledger.reconciliationMatched,
+      );
+      els.approveReleaseBtn.disabled = !approvable;
 
       let tone = "ok";
       let humanLabel = "Cleared for human approval";
@@ -1405,9 +1486,12 @@
       } else if (report.verdict === "HOLD_MISSING_EVIDENCE") {
         tone = "danger";
         humanLabel = "Held: missing physical evidence";
+      } else if (report.verdict === "HOLD_RECONCILIATION_MISMATCH") {
+        tone = "danger";
+        humanLabel = "Held: money reconciliation mismatch";
       } else if (report.verdict === "FROZEN_DISPUTE_COLLISION") {
         tone = "danger";
-        humanLabel = "Frozen: active linked dispute";
+        humanLabel = "Frozen: linked dispute collision";
       } else if (report.verdict === "VERIFY_DISPUTE_MATCH") {
         tone = "warn";
         humanLabel = "Verify ambiguous dispute match";
@@ -1426,16 +1510,16 @@
 
       if (report.ledger.blockedUnsafeRefundKsh > 0) {
         els.protectionVal.textContent = `${fmtKsh(report.ledger.blockedUnsafeRefundKsh)} blocked`;
-        els.protectionSub.textContent = `Unsafe cross-system refund blocked; ${fmtKsh(report.ledger.heldReserveKsh)} disputed reserve held.`;
+        els.protectionSub.textContent = `Unsafe cross-system refund blocked; ${fmtKsh(report.ledger.heldReserveKsh)} reserve held from net settlement.`;
       } else if (report.ledger.misallocationCaughtKsh > 0) {
         els.protectionVal.textContent = `${fmtKsh(report.ledger.misallocationCaughtKsh)} reallocated`;
         els.protectionSub.textContent = `Wrong-seller allocation fixed while batch total stayed ${fmtKsh(report.ledger.supportedTotalKsh)}.`;
       } else if (report.ledger.heldReserveKsh > 0) {
         els.protectionVal.textContent = `${fmtKsh(report.ledger.heldReserveKsh)} reserve held`;
-        els.protectionSub.textContent = `Requested refund: ${fmtKsh(report.ledger.requestedRefundKsh)}. Held pending verification.`;
+        els.protectionSub.textContent = `Requested refund: ${fmtKsh(report.ledger.requestedRefundKsh)}. ${fmtKsh(report.ledger.totalWithheldFromGrossKsh)} withheld from gross lines.`;
       } else {
         els.protectionVal.textContent = fmtKsh(report.ledger.supportedTotalKsh);
-        els.protectionSub.textContent = "Verified allocation matches draft and source records exactly.";
+        els.protectionSub.textContent = "Verified allocation reconciles with posted settlement totals.";
       }
 
       const overlapMatch = report.overlapDetail.match(/for (\d+)ms/);
@@ -1448,9 +1532,8 @@
       renderGantt(report);
       renderSourceCards(sourceRecords);
 
-      setOperatorDecision(
-        report.verdict === "READY_FOR_HUMAN_APPROVAL" ? "APPROVED_FOR_RELEASE" : "PENDING",
-      );
+      // Every verdict starts pending until a human operator explicitly approves, holds, or rejects.
+      renderOperatorDecisionBadge("PENDING");
 
       const rowsHtml = report.ledger.lines
         .map((line) => {
@@ -1499,11 +1582,11 @@
 
       const baseSeller = baseline.acceptedProposal?.debitSellerId ?? baseline.verdict;
       const guardSeller = report.acceptedProposal?.debitSellerId ?? report.verdict;
-      const prevented = baseline.verdict !== report.verdict || baseSeller !== guardSeller;
+      const diverged = baseline.verdict !== report.verdict || baseSeller !== guardSeller;
       els.baselineBadge.innerHTML = `
-        <span>1-Agent Snapshot (same t=0):</span>
+        <span>t=0 Snapshot Baseline:</span>
         <code>${escapeHtml(baseSeller)}</code>
-        <span class="status-tag ${prevented ? "ok" : ""}">${prevented ? "mid-flight caught" : "matched"}</span>
+        <span class="status-tag ${diverged ? "warn" : ""}">${diverged ? "missed live update" : "matched static t=0"}</span>
       `;
 
       if (report.interceptions.length === 0) {
@@ -1514,7 +1597,7 @@
               <span class="eyebrow">epoch ${report.finalEpoch}</span>
             </div>
             <div class="gate-desc">
-              RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with zero active linked disputes.
+              RefundDeskAgent proposal matched DisputeFulfillmentSentinel verification with reconciled totals and zero blocking disputes.
             </div>
           </div>
         `;
@@ -1543,18 +1626,27 @@
 
     async function sendLiveInterrupt(kind, targetSellerId) {
       if (!state.activeSessionId) return;
-      setLiveInterruptButtons(false);
-      await fetch(`/api/sessions/${state.activeSessionId}/inject`, {
+      const res = await fetch(`/api/sessions/${state.activeSessionId}/inject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind, targetSellerId }),
       });
+      const data = await res.json();
+      if (res.ok && state.lastBundle) {
+        showOperatorNotice(
+          `Post-run webhook received (${data.injected}, epoch -> ${data.epoch}, verdict -> ${data.currentVerdict}). Displayed epoch ${state.lastBundle.report.finalEpoch} is now stale; clicking Approve Release will return 409 Conflict.`,
+          "warn",
+        );
+      }
     }
 
     async function runSelected() {
       els.runBtn.disabled = true;
       els.topRunBtn.disabled = true;
+      els.approveReleaseBtn.disabled = true;
+      showOperatorNotice("");
       state.activeSessionId = null;
+      state.lastBundle = null;
       state.events = [];
       renderFeed();
       els.gateBox.innerHTML = `<div class="gate-desc">Inspecting concurrent agent loops...</div>`;
@@ -1603,9 +1695,10 @@
               state.events.push(parsed);
               renderFeed();
             } else if (eventType === "report") {
-              setLiveInterruptButtons(false);
-              state.activeSessionId = null;
               renderReport(parsed);
+              // Keep interrupt buttons enabled post-run so judges can test post-run
+              // webhook arrival + 409 Conflict stale-approval rejection live.
+              setLiveInterruptButtons(Boolean(state.activeSessionId));
             } else if (eventType === "error") {
               throw new Error(parsed.error);
             }
@@ -1616,9 +1709,8 @@
         els.verdictTag.innerHTML = `<span class="dot danger"></span>ERROR`;
         els.verdictHeadline.textContent = "Review failed";
         els.verdictSub.textContent = err.message;
-      } finally {
         setLiveInterruptButtons(false);
-        state.activeSessionId = null;
+      } finally {
         els.runBtn.disabled = false;
         els.topRunBtn.disabled = false;
       }
@@ -1659,24 +1751,32 @@
       let approvedKsh = 0;
       let heldKsh = 0;
       for (const item of summary.items) {
+        const approvable = Boolean(
+          item.approvable &&
+            isApprovableVerdict(item.report.verdict, item.report.ledger.reconciliationMatched),
+        );
         const dec = state.batchDecisions[item.checkoutId] ?? item.operatorDecision;
-        if (dec === "APPROVED_FOR_RELEASE") {
+        if (dec === "APPROVED_FOR_RELEASE" && approvable) {
           approvedKsh += item.report.ledger.supportedTotalKsh;
         } else {
-          heldKsh += item.report.ledger.draftTotalKsh;
+          heldKsh += item.report.ledger.supportedTotalKsh;
         }
       }
 
-      els.batchLoopsVal.textContent = `${summary.concurrentAgentLoops} loops / ${summary.checkoutCount} checkouts`;
-      els.batchOverlapSub.textContent = `Completed in ${summary.durationMs}ms | All overlaps verified: ${summary.allOverlapsVerified ? "Yes" : "No"}`;
+      els.batchLoopsVal.textContent = `${summary.checkoutCount} checkouts (2 loops each)`;
+      els.batchOverlapSub.textContent = `Completed in ${summary.durationMs}ms | Verified overlap inside all ${summary.checkoutCount} checkouts: ${summary.allOverlapsVerified ? "Yes" : "No"}`;
       els.batchApprovedVal.textContent = fmtKsh(approvedKsh);
       els.batchHeldVal.textContent = fmtKsh(heldKsh);
       els.batchCorrectedVal.textContent = fmtKsh(summary.totalMisallocationsCorrectedKsh);
       els.batchStatusTag.className = "status-tag ok";
-      els.batchStatusTag.textContent = `${summary.autoClearedCount} auto-cleared / ${summary.exceptionCount} exceptions`;
+      els.batchStatusTag.textContent = `${summary.readyForApprovalCount} eligible / ${summary.checkoutCount - summary.readyForApprovalCount} blocked (all pending sign-off)`;
 
       els.batchBody.innerHTML = summary.items
         .map((item) => {
+          const approvable = Boolean(
+            item.approvable &&
+              isApprovableVerdict(item.report.verdict, item.report.ledger.reconciliationMatched),
+          );
           const dec = state.batchDecisions[item.checkoutId] ?? item.operatorDecision;
           const v = item.report.verdict;
           const vTone =
@@ -1696,7 +1796,7 @@
               <td>${fmtKsh(item.report.ledger.heldReserveKsh)}</td>
               <td style="text-align:right;">
                 <div style="display:inline-flex; gap:4px;">
-                  <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "APPROVED_FOR_RELEASE" ? "selected-ok" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="APPROVED_FOR_RELEASE">Approve</button>
+                  <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "APPROVED_FOR_RELEASE" && approvable ? "selected-ok" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="APPROVED_FOR_RELEASE" ${approvable ? "" : 'disabled title="Not eligible for approval while held or frozen"'}>Approve</button>
                   <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "HELD_IN_RESERVE" ? "selected-warn" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="HELD_IN_RESERVE">Hold</button>
                   <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "REJECTED" ? "selected-danger" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="REJECTED">Reject</button>
                 </div>
@@ -1711,7 +1811,18 @@
 
       for (const btn of els.batchBody.querySelectorAll(".batch-op")) {
         btn.addEventListener("click", () => {
-          state.batchDecisions[btn.dataset.chk] = btn.dataset.dec;
+          const chk = btn.dataset.chk;
+          const nextDec = btn.dataset.dec;
+          const row = summary.items.find((i) => i.checkoutId === chk);
+          if (
+            nextDec === "APPROVED_FOR_RELEASE" &&
+            (!row ||
+              !row.approvable ||
+              !isApprovableVerdict(row.report.verdict, row.report.ledger.reconciliationMatched))
+          ) {
+            return;
+          }
+          state.batchDecisions[chk] = nextDec;
           renderBatchSummary();
         });
       }
@@ -1727,7 +1838,7 @@
     async function runBatchAudit() {
       els.runBatchBtn.disabled = true;
       els.batchStatusTag.className = "status-tag sky";
-      els.batchStatusTag.textContent = "running 8 concurrent loops...";
+      els.batchStatusTag.textContent = "running 4 concurrent checkout reviews...";
       try {
         const res = await fetch("/api/batch");
         const summary = await res.json();
@@ -1777,7 +1888,7 @@
       }
 
       for (const btn of document.querySelectorAll(".op-btn")) {
-        btn.addEventListener("click", () => setOperatorDecision(btn.dataset.op));
+        btn.addEventListener("click", () => submitOperatorDecision(btn.dataset.op));
       }
 
       for (const pill of document.querySelectorAll(".filter-pill")) {

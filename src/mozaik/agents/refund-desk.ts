@@ -26,10 +26,12 @@ class WhenCaseOpenedOrRevalidationNeeded extends SituationSpecification {
       return true;
     }
     if (event.type === "evidence.updated") {
-      const payload = event.payload as EvidenceUpdatedPayload | undefined;
+      const payload = event.payload as
+        | (EvidenceUpdatedPayload & { disputeClosed?: boolean })
+        | undefined;
       return (
         this.state.allowPostAcceptanceRevalidation &&
-        Boolean(payload?.invalidatedPriorApproval)
+        (Boolean(payload?.invalidatedPriorApproval) || Boolean(payload?.disputeClosed))
       );
     }
     return false;
@@ -37,7 +39,7 @@ class WhenCaseOpenedOrRevalidationNeeded extends SituationSpecification {
 }
 
 const REFUND_DESK_INSTRUCTION =
-  "You are the Black Friday Refund Desk Agent. Read the customer refund ticket, order lines, and payout draft, then call `propose_refund` with the seller to debit and the current epoch. Never invent amounts; use the exact refund amount from the source record. If an interception gate blocks your tool call and provides verified Sentinel findings or a newer epoch, immediately call `propose_refund` again obeying the correction.";
+  "You are the Black Friday Refund Desk Agent. Read the customer refund ticket, order lines, and payout draft, then call `propose_refund` ONCE with the seller to debit, exact checkoutId, exact refundAmountKsh from the source record, and current epoch. Never invent amounts. If an interception gate blocks your tool call and provides verified Sentinel findings or a newer epoch, call `propose_refund` once obeying the correction. As soon as `propose_refund` returns `accepted: true`, immediately respond with a brief final summary and NEVER call `propose_refund` again for that epoch.";
 
 export function createRefundDeskAgent(
   runtime: RefundGuardRuntimeApi,
@@ -47,7 +49,7 @@ export function createRefundDeskAgent(
     type: "function",
     name: "propose_refund",
     description:
-      "Submit a verified seller refund deduction proposal for human approval. Always specify exact debitSellerId and current epoch.",
+      "Submit a verified seller refund deduction proposal for human approval. Always specify exact debitSellerId and current epoch. Call once per epoch.",
     strict: false,
     parameters: {
       type: "object",
@@ -68,14 +70,22 @@ export function createRefundDeskAgent(
       epoch: number;
       rationale: string;
     }) => {
-      // Defensive guard: never accept a proposal whose epoch is already stale.
+      // Defensive guard: never accept a stale epoch or duplicate acceptance in the same epoch.
       const commitEpoch = state.epoch;
-      if (args.epoch < commitEpoch) {
+      if (args.epoch !== commitEpoch) {
         return {
           accepted: false,
           reason: "SUPERSEDED_EVIDENCE",
           proposalEpoch: args.epoch,
           currentEpoch: commitEpoch,
+        };
+      }
+      if (state.acceptedProposal && state.acceptedProposal.epoch === commitEpoch) {
+        return {
+          accepted: false,
+          reason: "DUPLICATE_PROPOSAL_BLOCKED",
+          alreadyAcceptedSellerId: state.acceptedProposal.debitSellerId,
+          epoch: commitEpoch,
         };
       }
 
@@ -93,7 +103,7 @@ export function createRefundDeskAgent(
         epoch: commitEpoch,
         checkoutId: args.checkoutId,
         debitSellerId: args.debitSellerId,
-        refundAmountKsh: state.scenario.draft.refundAmountKsh, // deterministic source amount
+        refundAmountKsh: args.refundAmountKsh,
         rationale: args.rationale,
         citedSourceIds: [...cited],
       };

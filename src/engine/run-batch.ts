@@ -1,5 +1,5 @@
 import { BLACK_FRIDAY_BATCH_CHECKOUTS } from "../finance/batch.js";
-import type { CaseRunReport } from "../finance/types.js";
+import { isVerdictApprovable, type CaseRunReport } from "../finance/types.js";
 import { runRefundGuardCase } from "./run-case.js";
 
 export type OperatorDecision = "PENDING" | "APPROVED_FOR_RELEASE" | "HELD_IN_RESERVE" | "REJECTED";
@@ -10,6 +10,7 @@ export interface BatchCheckoutItem {
   readonly title: string;
   readonly sellersLabel: string;
   readonly report: CaseRunReport;
+  readonly approvable: boolean;
   readonly operatorDecision: OperatorDecision;
 }
 
@@ -20,6 +21,7 @@ export interface BatchRunSummary {
   readonly checkoutCount: number;
   readonly concurrentAgentLoops: number;
   readonly allOverlapsVerified: boolean;
+  readonly readyForApprovalCount: number;
   readonly autoClearedCount: number;
   readonly exceptionCount: number;
   readonly totalDraftReleaseKsh: number;
@@ -31,8 +33,10 @@ export interface BatchRunSummary {
 }
 
 /**
- * Run the full 4-checkout Black Friday payout batch concurrently across
- * 4 isolated Mozaik runtimes (8 concurrent agent loops active in parallel).
+ * Run 4 distinct Black Friday checkout reviews concurrently, each running 2 parallel
+ * Mozaik agent loops with measured overlap inside each checkout.
+ * Every checkout starts as `operatorDecision: "PENDING"` until an operator explicitly
+ * signs off (and only eligible, reconciled verdicts may be approved).
  */
 export async function runBlackFridayBatch(options?: {
   modeOverride?: "auto" | "live" | "mock";
@@ -50,21 +54,25 @@ export async function runBlackFridayBatch(options?: {
 
   const items: BatchCheckoutItem[] = BLACK_FRIDAY_BATCH_CHECKOUTS.map((scenario, idx) => {
     const report = reports[idx];
-    const isAutoCleared = report.verdict === "READY_FOR_HUMAN_APPROVAL";
+    const approvable =
+      isVerdictApprovable(report.verdict) && report.ledger.reconciliationMatched;
     return {
       scenarioId: scenario.id,
       checkoutId: scenario.checkoutId,
       title: scenario.title,
       sellersLabel: `${scenario.sellers["SELLER-A"].name} / ${scenario.sellers["SELLER-B"].name}`,
       report,
-      operatorDecision: isAutoCleared ? "APPROVED_FOR_RELEASE" : "PENDING",
+      approvable,
+      // Never pre-approve payouts before explicit human operator review.
+      operatorDecision: "PENDING",
     };
   });
 
-  const autoClearedCount = items.filter(
-    (i) => i.report.verdict === "READY_FOR_HUMAN_APPROVAL",
+  const cleanReadyCount = items.filter(
+    (i) => i.report.verdict === "READY_FOR_HUMAN_APPROVAL" && i.approvable,
   ).length;
-  const exceptionCount = items.length - autoClearedCount;
+  const readyForApprovalCount = items.filter((i) => i.approvable).length;
+  const exceptionCount = items.length - cleanReadyCount;
 
   return {
     batchId: "BATCH-BF-2026-01",
@@ -73,7 +81,8 @@ export async function runBlackFridayBatch(options?: {
     checkoutCount: items.length,
     concurrentAgentLoops: items.length * 2,
     allOverlapsVerified: items.every((i) => i.report.concurrentOverlapVerified),
-    autoClearedCount,
+    readyForApprovalCount,
+    autoClearedCount: cleanReadyCount,
     exceptionCount,
     totalDraftReleaseKsh: items.reduce((s, i) => s + i.report.ledger.draftTotalKsh, 0),
     totalSupportedReleaseKsh: items.reduce((s, i) => s + i.report.ledger.supportedTotalKsh, 0),

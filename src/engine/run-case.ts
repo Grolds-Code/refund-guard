@@ -1,17 +1,20 @@
 import { createHuman, SemanticEvent } from "@mozaik-ai/core";
-import { computeGroundedLedger } from "../finance/ledger.js";
-import type {
-  CaseRunReport,
-  ChargebackWebhookRecord,
-  FinalVerdict,
-  MidFlightInjection,
-  ScenarioFixture,
-  SellerId,
-  WarehouseNoteRecord,
+import { checkMoneyReconciliation, computeGroundedLedger } from "../finance/ledger.js";
+import {
+  isVerdictApprovable,
+  type CaseRunReport,
+  type ChargebackWebhookRecord,
+  type DisputeMatchState,
+  type FinalVerdict,
+  type MidFlightInjection,
+  type ScenarioFixture,
+  type SellerId,
+  type WarehouseNoteRecord,
 } from "../finance/types.js";
 import { createAuditObserver } from "../mozaik/agents/observer.js";
 import { createRefundDeskAgent } from "../mozaik/agents/refund-desk.js";
 import { createSentinelAgent } from "../mozaik/agents/sentinel.js";
+import { validateSentinelFindingForClearance } from "../mozaik/interception.js";
 import { resolveInferenceMode } from "../mozaik/runner.js";
 import {
   createRefundGuardRuntime,
@@ -20,8 +23,22 @@ import {
 } from "../mozaik/runtime.js";
 
 export interface PostAcceptanceInjector {
-  injectWarehouseCorrection(note: WarehouseNoteRecord): void;
-  injectChargeback(chargeback: ChargebackWebhookRecord): void;
+  injectWarehouseCorrection(note: WarehouseNoteRecord): {
+    epoch: number;
+    invalidatedPriorApproval: boolean;
+  };
+  injectChargeback(chargeback: ChargebackWebhookRecord): {
+    relevant: boolean;
+    epoch: number;
+    invalidatedPriorApproval: boolean;
+  };
+  getCurrentSnapshot(): {
+    epoch: number;
+    verdict: FinalVerdict;
+    approvable: boolean;
+    reconciliationMatched: boolean;
+    report: CaseRunReport;
+  };
 }
 
 export interface RunCaseOptions {
@@ -39,7 +56,7 @@ export interface RunCaseOptions {
   onProposalAccepted?: (injector: PostAcceptanceInjector) => void;
   /**
    * Invoked once the Mozaik runtime is joined and ready, returning live injector
-   * callbacks that can interrupt the running agents in real time (used by UI live interrupt).
+   * and snapshot callbacks that can interrupt the session mid-run or post-run.
    */
   onSessionReady?: (injector: PostAcceptanceInjector) => void;
 }
@@ -88,39 +105,114 @@ export async function runRefundGuardCase(
   runtime.join(sentinel);
   runtime.join(observer);
 
+  const buildCurrentReport = (): CaseRunReport => {
+    const latestRelevantDispute = state.getLatestRelevantChargeback();
+    const currentEpochFinding = state.getLatestSentinelFinding();
+    const finalVerdict = resolveFinalVerdictWithInvariant(
+      state,
+      latestRelevantDispute?.evaluation.matchState ?? null,
+      currentEpochFinding,
+    );
+
+    const isApproved = isVerdictApprovable(finalVerdict);
+    const acceptedForCurrentEpoch =
+      isApproved && state.acceptedProposal?.epoch === state.epoch
+        ? state.acceptedProposal
+        : null;
+
+    const supportedDebitSellerId = acceptedForCurrentEpoch?.debitSellerId ?? null;
+
+    const ledger = computeGroundedLedger(
+      scenario,
+      finalVerdict,
+      supportedDebitSellerId,
+      currentEpochFinding ?? state.getMostRecentAnyEpochFinding(),
+      latestRelevantDispute?.evaluation ?? state.lastDisputeEvaluation,
+    );
+    const overlap = state.computeOverlapMetrics();
+
+    return {
+      scenarioId: scenario.id,
+      scenarioTitle: scenario.title,
+      mode: resolved.mode,
+      modelName: resolved.modelName,
+      architecture: "refund-guard-concurrent",
+      verdict: finalVerdict,
+      finalEpoch: state.epoch,
+      durationMs: state.elapsedMs(),
+      concurrentOverlapVerified: overlap.overlapped,
+      overlapDetail: overlap.detail,
+      sentinelFinding: currentEpochFinding ?? state.getMostRecentAnyEpochFinding(),
+      disputeEvaluation: latestRelevantDispute?.evaluation ?? state.lastDisputeEvaluation,
+      acceptedProposal: acceptedForCurrentEpoch,
+      supersededProposals: [...state.supersededProposals],
+      interceptions: [...state.interceptions],
+      ledger,
+      timeline: [...state.timeline],
+    };
+  };
+
+  let runCompleted = false;
+
   const publishWarehouseCorrection = (note: WarehouseNoteRecord) => {
     const { epoch, invalidatedPriorApproval } = state.addWarehouseCorrection(note);
-    runtime.sendEvent(
-      SemanticEvent.create("evidence.updated", coordinator.getId(), {
-        epoch,
-        kind: "WAREHOUSE_CORRECTION",
-        sourceId: note.noteId,
-        invalidatedPriorApproval,
-      }),
-      coordinator.getId(),
-    );
+    if (!runCompleted) {
+      runtime.sendEvent(
+        SemanticEvent.create("evidence.updated", coordinator.getId(), {
+          epoch,
+          kind: "WAREHOUSE_CORRECTION",
+          sourceId: note.noteId,
+          invalidatedPriorApproval,
+        }),
+        coordinator.getId(),
+      );
+    }
+    return { epoch, invalidatedPriorApproval };
   };
 
   const publishChargeback = (chargeback: ChargebackWebhookRecord) => {
     const res = state.addChargebackWebhook(chargeback);
     if (!res.relevant) {
-      // Unrelated or inactive disputes must not bump epoch or disturb clean checkouts.
-      return;
-    }
-    runtime.sendEvent(
-      SemanticEvent.create("evidence.updated", coordinator.getId(), {
+      return {
+        relevant: false,
         epoch: res.epoch,
-        kind: "CHARGEBACK_WEBHOOK",
-        sourceId: chargeback.disputeId,
-        invalidatedPriorApproval: res.invalidatedPriorApproval,
-      }),
-      coordinator.getId(),
-    );
+        invalidatedPriorApproval: false,
+      };
+    }
+    const disputeClosed = res.evaluation.matchState === "INACTIVE";
+    if (!runCompleted) {
+      runtime.sendEvent(
+        SemanticEvent.create("evidence.updated", coordinator.getId(), {
+          epoch: res.epoch,
+          kind: "CHARGEBACK_WEBHOOK",
+          sourceId: chargeback.disputeId,
+          invalidatedPriorApproval: res.invalidatedPriorApproval,
+          disputeClosed,
+        }),
+        coordinator.getId(),
+      );
+    }
+    return {
+      relevant: true,
+      epoch: res.epoch,
+      invalidatedPriorApproval: res.invalidatedPriorApproval,
+    };
   };
 
   const liveInjector: PostAcceptanceInjector = {
     injectWarehouseCorrection: publishWarehouseCorrection,
     injectChargeback: publishChargeback,
+    getCurrentSnapshot: () => {
+      const report = buildCurrentReport();
+      return {
+        epoch: report.finalEpoch,
+        verdict: report.verdict,
+        approvable:
+          isVerdictApprovable(report.verdict) && report.ledger.reconciliationMatched,
+        reconciliationMatched: report.ledger.reconciliationMatched,
+        report,
+      };
+    },
   };
 
   options.onSessionReady?.(liveInjector);
@@ -147,8 +239,6 @@ export async function runRefundGuardCase(
     },
   );
 
-  // Schedule any mid-flight event (late warehouse correction or async PSP dispute)
-  // so it arrives while RefundDeskAgent is actively running.
   let injectionTimer: ReturnType<typeof setTimeout> | undefined;
   if (scenario.midFlightInjection) {
     const inj = scenario.midFlightInjection;
@@ -175,67 +265,22 @@ export async function runRefundGuardCase(
   try {
     await state.waitUntilComplete(resolved.mode === "live" ? 45_000 : 12_000);
   } finally {
+    runCompleted = true;
     if (injectionTimer) clearTimeout(injectionTimer);
   }
 
-  // Strict readiness invariant: never return a ready verdict unless both the accepted
-  // proposal and the verified Sentinel finding belong to the current epoch and no
-  // active or ambiguous dispute applies.
-  const latestRelevantDispute = state.getLatestRelevantChargeback();
-  const currentEpochFinding = state.getLatestSentinelFinding();
-  const finalVerdict = resolveFinalVerdictWithInvariant(
-    state,
-    latestRelevantDispute?.evaluation.matchState ?? null,
-    currentEpochFinding,
-  );
-
-  const isApproved =
-    finalVerdict === "READY_FOR_HUMAN_APPROVAL" ||
-    finalVerdict === "CORRECTED_READY_FOR_APPROVAL";
-
-  const acceptedForCurrentEpoch =
-    isApproved && state.acceptedProposal?.epoch === state.epoch
-      ? state.acceptedProposal
-      : null;
-
-  const supportedDebitSellerId = acceptedForCurrentEpoch?.debitSellerId ?? null;
-
-  const ledger = computeGroundedLedger(
-    scenario,
-    finalVerdict,
-    supportedDebitSellerId,
-    currentEpochFinding ?? state.getMostRecentAnyEpochFinding(),
-    latestRelevantDispute?.evaluation ?? state.lastDisputeEvaluation,
-  );
-  const overlap = state.computeOverlapMetrics();
-
-  return {
-    scenarioId: scenario.id,
-    scenarioTitle: scenario.title,
-    mode: resolved.mode,
-    modelName: resolved.modelName,
-    architecture: "refund-guard-concurrent",
-    verdict: finalVerdict,
-    finalEpoch: state.epoch,
-    durationMs: state.elapsedMs(),
-    concurrentOverlapVerified: overlap.overlapped,
-    overlapDetail: overlap.detail,
-    sentinelFinding: currentEpochFinding ?? state.getMostRecentAnyEpochFinding(),
-    disputeEvaluation: latestRelevantDispute?.evaluation ?? state.lastDisputeEvaluation,
-    acceptedProposal: acceptedForCurrentEpoch,
-    supersededProposals: state.supersededProposals,
-    interceptions: state.interceptions,
-    ledger,
-    timeline: state.timeline,
-  };
+  return buildCurrentReport();
 }
 
 function resolveFinalVerdictWithInvariant(
   state: RefundGuardState,
-  relevantDisputeMatchState: "VERIFIED_ACTIVE_MATCH" | "AMBIGUOUS_MATCH" | "UNRELATED" | "INACTIVE" | null,
+  relevantDisputeMatchState: DisputeMatchState | null,
   currentEpochFinding: ReturnType<RefundGuardState["getLatestSentinelFinding"]>,
 ): FinalVerdict {
-  if (relevantDisputeMatchState === "VERIFIED_ACTIVE_MATCH") {
+  if (
+    relevantDisputeMatchState === "VERIFIED_ACTIVE_MATCH" ||
+    relevantDisputeMatchState === "VERIFIED_LOST_DISPUTE"
+  ) {
     return "FROZEN_DISPUTE_COLLISION";
   }
   if (
@@ -244,17 +289,29 @@ function resolveFinalVerdictWithInvariant(
   ) {
     return "VERIFY_DISPUTE_MATCH";
   }
+
+  // Deterministic money reconciliation must pass before ANY payout can be marked ready.
+  const recon = checkMoneyReconciliation(
+    state.scenario,
+    state.acceptedProposal?.refundAmountKsh,
+  );
+  if (!recon.ok) {
+    return "HOLD_RECONCILIATION_MISMATCH";
+  }
+
   if (currentEpochFinding?.status === "MISSING_OR_AMBIGUOUS") {
     return "HOLD_MISSING_EVIDENCE";
   }
 
+  const findingCheck = validateSentinelFindingForClearance(state, currentEpochFinding);
   const proposal = state.acceptedProposal;
   const currentReady =
+    findingCheck.valid &&
+    currentEpochFinding !== null &&
     proposal !== null &&
     proposal.epoch === state.epoch &&
-    currentEpochFinding !== null &&
-    currentEpochFinding.epoch === state.epoch &&
-    currentEpochFinding.status === "VERIFIED_RETURN" &&
+    proposal.checkoutId === state.scenario.checkoutId &&
+    proposal.refundAmountKsh === recon.expectedRefundKsh &&
     currentEpochFinding.verifiedSellerId === proposal.debitSellerId;
 
   if (currentReady) {
@@ -265,12 +322,13 @@ function resolveFinalVerdictWithInvariant(
     return wasCorrected ? "CORRECTED_READY_FOR_APPROVAL" : "READY_FOR_HUMAN_APPROVAL";
   }
 
-  // If an earlier proposal was invalidated by newer evidence and revalidation could
-  // not complete for the current epoch, fail closed to PENDING_REVALIDATION.
   if (state.revalidationRequestedForEpoch !== null || state.supersededProposals.length > 0) {
     return "PENDING_REVALIDATION";
   }
 
+  if (state.verdict === "HOLD_RECONCILIATION_MISMATCH") {
+    return "HOLD_RECONCILIATION_MISMATCH";
+  }
   return state.verdict === "HOLD_MISSING_EVIDENCE"
     ? "HOLD_MISSING_EVIDENCE"
     : "PENDING_REVALIDATION";
@@ -330,12 +388,12 @@ export function buildInjectedChargeback(scenario: ScenarioFixture): ChargebackWe
     disputeId: `DSP-LIVE-${Date.now().toString().slice(-4)}`,
     status: "OPEN",
     receivedAt: new Date().toISOString(),
-    pspReferenceSuffix: scenario.checkoutId.slice(-3),
+    pspReferenceSuffix: scenario.checkoutId.split("-").pop() ?? scenario.checkoutId.slice(-3),
     paymentSettlementId: capture?.settlementId ?? "STL-PAY-402",
     cardLast4: capture?.cardLast4 ?? "4421",
     amountKsh: scenario.ticket.requestedRefundKsh,
-    reasonCode: "VISA_13.1_MERCHANDISE_NOT_RECEIVED",
-    narrative: `Live injected issuing-bank dispute on card ending ${capture?.cardLast4 ?? "4421"} for KSh ${scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")} (checkout ref ending ${scenario.checkoutId.slice(-3)}, settlement ${capture?.settlementId ?? "STL-PAY-402"}).`,
+    reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
+    narrative: `Live injected issuing-bank dispute on card ending ${capture?.cardLast4 ?? "4421"} for KSh ${scenario.ticket.requestedRefundKsh.toLocaleString("en-KE")} (checkout ref ${scenario.checkoutId}, settlement ${capture?.settlementId ?? "STL-PAY-402"}).`,
   };
 }
 
@@ -343,8 +401,12 @@ export function buildInjectedWarehouseCorrection(
   scenario: ScenarioFixture,
   targetSellerId: SellerId,
 ): WarehouseNoteRecord {
-  const itemText =
-    targetSellerId === "SELLER-A"
+  const line = scenario.orderLines.find((l) => l.sellerId === targetSellerId);
+  const otherLine = scenario.orderLines.find((l) => l.sellerId !== targetSellerId);
+  const sellerName = scenario.sellers[targetSellerId].name;
+  const itemText = line
+    ? `${line.itemTitle} (SKU ${line.sku}, ${sellerName} / ${targetSellerId}). ${otherLine ? `${otherLine.itemTitle} was NOT returned.` : ""}`
+    : targetSellerId === "SELLER-A"
       ? "Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Boots were NOT returned."
       : "Tan Leather Chelsea Boots (SKU BTS-TAN-42, Rift Valley Footwear / Seller B). Jacket was NOT returned.";
 

@@ -287,12 +287,14 @@ function parseOrderLinesFromPrompt(prompt: string): ParsedOrderLine[] {
 }
 
 /**
- * Dynamic natural-language parser for the Sentinel mock runner.
+ * Rule-based deterministic parser for the Sentinel mock runner.
  * Evaluates order lines, warehouse note text, and linked dispute signals present
- * in the prompt, supporting arbitrary Black Friday checkouts and live judge edits.
+ * in the prompt (limited natural-language coverage; configure an LLM API key for
+ * open-ended free-text parsing).
  */
 function analyzeSentinelEvidence(prompt: string): {
   epoch: number;
+  checkoutId: string;
   status: SentinelEvidenceStatus;
   verifiedSellerId: SellerId | "NONE";
   verifiedLineId: string;
@@ -310,7 +312,8 @@ function analyzeSentinelEvidence(prompt: string): {
   const chargebackSection = extractSection(prompt, "CHARGEBACK_SECTION:", "END_EVIDENCE");
   const orderLines = parseOrderLinesFromPrompt(prompt);
 
-  const matchedLine = inferWarehouseOrderLine(noteText, orderLines);
+  const missingOrTentative = isWarehouseNoteMissingOrTentative(noteText);
+  const matchedLine = missingOrTentative ? null : inferWarehouseOrderLine(noteText, orderLines);
 
   // 1. Evaluate dispute linkage if present in CHARGEBACK_SECTION
   if (chargebackSection.length > 0 && !/^NONE$/i.test(chargebackSection.trim())) {
@@ -330,51 +333,55 @@ function analyzeSentinelEvidence(prompt: string): {
       "OPEN",
     );
 
-    if (disputeStatus === "OPEN" && matchState === "VERIFIED_ACTIVE_MATCH") {
+    if (
+      (disputeStatus === "OPEN" && matchState === "VERIFIED_ACTIVE_MATCH") ||
+      (disputeStatus === "CLOSED_LOST" && matchState === "VERIFIED_LOST_DISPUTE")
+    ) {
       return {
         epoch,
+        checkoutId,
         status: "DISPUTE_COLLISION",
         verifiedSellerId: matchedLine?.sellerId ?? "NONE",
         verifiedLineId: matchedLine?.lineId ?? "NONE",
         disputeId,
         evidenceNoteId: noteId,
-        confidence: "HIGH",
-        summary: `Verified active PSP dispute ${disputeId} linked to ${checkoutId} / ${settlementId}. Block unsafe cross-system refund proposal.`,
+        confidence: matchedLine ? "HIGH" : "LOW",
+        summary:
+          matchState === "VERIFIED_LOST_DISPUTE"
+            ? `Verified prior lost PSP dispute ${disputeId} (CLOSED_LOST) linked to ${checkoutId} / ${settlementId}. Block additional refund.`
+            : `Verified active PSP dispute ${disputeId} linked to ${checkoutId} / ${settlementId}. Block unsafe cross-system refund proposal.`,
         citedSourceIds: [disputeId, noteId, settlementId],
       };
     }
 
-    if (disputeStatus === "OPEN" && matchState === "AMBIGUOUS_MATCH") {
+    if (matchState === "AMBIGUOUS_MATCH") {
       return {
         epoch,
+        checkoutId,
         status: "DISPUTE_AMBIGUOUS",
         verifiedSellerId: "NONE",
         verifiedLineId: "NONE",
         disputeId,
         evidenceNoteId: noteId,
         confidence: "LOW",
-        summary: `Dispute ${disputeId} partially matches payment signals for ${checkoutId}; operator verification required before releasing payout.`,
+        summary: `Dispute ${disputeId} partially matches or conflicts with payment signals for ${checkoutId}; operator verification required before releasing payout.`,
         citedSourceIds: [disputeId, noteId, settlementId],
       };
     }
   }
 
-  // 2. Check for missing / unreceived / unverified parcel language
-  const lowerNote = noteText.toLowerCase();
-  const isMissing =
-    /(no parcel|not received|label created only|unverified|missing|empty box|ambiguous|unknown item|pending delivery)/i.test(
-      lowerNote,
-    );
-  if (isMissing) {
+  // 2. Check for missing / unreceived / tentative / multi-item ambiguous language
+  if (missingOrTentative) {
     return {
       epoch,
+      checkoutId,
       status: "MISSING_OR_AMBIGUOUS",
       verifiedSellerId: "NONE",
       verifiedLineId: "NONE",
       disputeId: "NONE",
       evidenceNoteId: noteId,
       confidence: "LOW",
-      summary: `Warehouse intake ${noteId} does not confirm physical receipt of an identifiable seller SKU.`,
+      summary: `Warehouse intake ${noteId} is missing, tentative, or ambiguous and does not verify a single returned seller SKU.`,
       citedSourceIds: [noteId],
     };
   }
@@ -383,6 +390,7 @@ function analyzeSentinelEvidence(prompt: string): {
   if (matchedLine) {
     return {
       epoch,
+      checkoutId,
       status: "VERIFIED_RETURN",
       verifiedSellerId: matchedLine.sellerId,
       verifiedLineId: matchedLine.lineId,
@@ -396,6 +404,7 @@ function analyzeSentinelEvidence(prompt: string): {
 
   return {
     epoch,
+    checkoutId,
     status: "MISSING_OR_AMBIGUOUS",
     verifiedSellerId: "NONE",
     verifiedLineId: "NONE",
@@ -407,25 +416,50 @@ function analyzeSentinelEvidence(prompt: string): {
   };
 }
 
+function isWarehouseNoteMissingOrTentative(noteText: string): boolean {
+  const normalized = noteText
+    .toLowerCase()
+    .replace(/\b(nothing|none|no\s+items?)\s+missing\b/g, "complete");
+
+  if (
+    /\b(no parcel|label created only|unverified|empty box|ambiguous|unknown item|pending delivery|pending bench|pending inspection|pending qc|tentative|preliminary|unopened|not yet opened|not yet inspected|both items|both products|all items)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (/\bmissing\b/i.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
 function inferWarehouseOrderLine(
   noteText: string,
   orderLines: readonly ParsedOrderLine[],
 ): ParsedOrderLine | null {
   const lowerNote = noteText.toLowerCase();
 
-  // Split into clauses so negations ("boots were NOT returned", "no boots in parcel")
-  // only suppress the negated clause rather than the positive return clause.
+  // Split into clauses so negations ("did not receive jacket", "boots were NOT returned",
+  // "customer kept the jacket") only suppress the negated clause rather than positive clauses.
   const positiveClauses = lowerNote
     .split(/[.;!\n]+/)
     .map((c) => c.trim())
     .filter((c) => c.length > 0)
     .filter(
       (c) =>
-        !/\b(was not|were not|not returned|not in parcel|no boots|no jacket|kept by|reused the .* box)\b/i.test(
+        !/\b(did not receive|didn't receive|never received|not received|was not|were not|not returned|not in parcel|no boots|no jacket|kept by|customer kept|buyer kept|kept the|reused the .* box)\b/i.test(
           c,
         ),
     );
   const positiveText = positiveClauses.join(" | ");
+  if (positiveText.length === 0) {
+    return null;
+  }
+
+  const actualMatch = positiveText.match(/inside is actually([^|]+)/i);
 
   // Dynamic scoring against parsed ORDER_LINES from the prompt
   if (orderLines.length > 0) {
@@ -453,7 +487,6 @@ function inferWarehouseOrderLine(
         }
       }
       // If a correction clause explicitly says "inside is actually ...", prioritize it heavily.
-      const actualMatch = positiveText.match(/inside is actually([^|]+)/i);
       if (actualMatch) {
         const actualClause = actualMatch[1];
         if (
@@ -467,13 +500,24 @@ function inferWarehouseOrderLine(
     });
 
     scored.sort((a, b) => b.score - a.score);
+    // If two different sellers both have positive return mentions and there is no explicit
+    // "inside is actually ..." override, fail closed as ambiguous rather than guessing.
+    if (
+      !actualMatch &&
+      scored.length >= 2 &&
+      scored[0].score > 0 &&
+      scored[1].score > 0 &&
+      scored[0].line.sellerId !== scored[1].line.sellerId
+    ) {
+      return null;
+    }
     if (scored[0].score > 0 && (scored.length === 1 || scored[0].score > scored[1].score)) {
       return scored[0].line;
     }
     return null;
   }
 
-  // Fallback for legacy prompts without ORDER_LINES section (e.g. snapshot baseline without lines)
+  // Fallback for prompts without ORDER_LINES section
   const mentionsJacket =
     /(jacket|jkt-nvy-l|nairobi streetwear|seller a|seller-a|line-402-a)/i.test(positiveText);
   const mentionsBoots =

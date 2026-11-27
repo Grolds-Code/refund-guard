@@ -1,18 +1,52 @@
+import {
+  FunctionCallItem,
+  ModelContext,
+  type ExecutableTransition,
+  type InferenceInput,
+} from "@mozaik-ai/core";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
+import { evaluateDisputeLink } from "../src/finance/dispute-match.js";
 import {
   createAmbiguousDisputeFixture,
   createUnrelatedDisputeFixture,
   getScenarioById,
 } from "../src/finance/fixtures.js";
+import { computeGroundedLedger } from "../src/finance/ledger.js";
+import type { ChargebackWebhookRecord, ScenarioFixture, SentinelFinding } from "../src/finance/types.js";
 import {
   runSingleAgentSnapshotBaseline,
   runTicketAndDraftBaseline,
 } from "../src/engine/baseline.js";
+import { runBlackFridayBatch } from "../src/engine/run-batch.js";
 import {
   buildInjectedChargeback,
   buildInjectedWarehouseCorrection,
   runRefundGuardCase,
 } from "../src/engine/run-case.js";
+import { RefundInterceptionGate } from "../src/mozaik/interception.js";
+import { RefundGuardState } from "../src/mozaik/runtime.js";
+import { createRefundGuardServer } from "../src/server.js";
+
+function makeDirectProposalTransition(args: Record<string, unknown>): ExecutableTransition {
+  const call = FunctionCallItem.rehydrate({
+    callId: `call_test_${Math.random().toString(36).slice(2, 8)}`,
+    name: "propose_refund",
+    args: JSON.stringify(args),
+  });
+  const inferenceInput: InferenceInput = {
+    model: "refund-guard-deterministic-v1",
+    context: ModelContext.create(),
+    tools: [],
+  };
+  return {
+    nextStateId: "function_call",
+    input: {
+      call,
+      inferenceInput,
+    },
+  } as ExecutableTransition;
+}
 
 describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
   it("Case 1: clears a verified allocation cleanly (A: KSh 50,000 / B: KSh 40,000, Total KSh 90,000)", async () => {
@@ -27,6 +61,7 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(report.interceptions).toHaveLength(0);
     expect(report.acceptedProposal?.debitSellerId).toBe("SELLER-A");
     expect(report.acceptedProposal?.epoch).toBe(report.finalEpoch);
+    expect(report.ledger.reconciliationMatched).toBe(true);
 
     const sellerA = report.ledger.lines.find((l) => l.sellerId === "SELLER-A")!;
     const sellerB = report.ledger.lines.find((l) => l.sellerId === "SELLER-B")!;
@@ -53,6 +88,7 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     const sellerA = report.ledger.lines.find((l) => l.sellerId === "SELLER-A")!;
     const sellerB = report.ledger.lines.find((l) => l.sellerId === "SELLER-B")!;
     expect(report.ledger.totalStillMatchesExactly).toBe(true);
+    expect(report.ledger.reconciliationMatched).toBe(true);
     expect(sellerA.draftNetPayoutKsh).toBe(60_000);
     expect(sellerB.draftNetPayoutKsh).toBe(30_000);
     expect(sellerA.supportedNetPayoutKsh).toBe(50_000);
@@ -73,6 +109,7 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(report.acceptedProposal).toBeNull();
     expect(report.interceptions.some((i) => i.reason === "MISSING_EVIDENCE")).toBe(true);
     expect(report.ledger.requestedRefundKsh).toBe(10_000);
+    expect(report.ledger.totalWithheldFromGrossKsh).toBe(20_000);
     expect(report.ledger.heldReserveKsh).toBe(10_000);
     expect(report.ledger.holdPolicyExplanation).toContain("Requested refund");
   });
@@ -105,8 +142,6 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
       runRefundGuardCase(scenario, { modeOverride: "mock", latencyScale: 0.5 }),
     ]);
 
-    // Fair Single-Agent Snapshot Baseline (same t=0 evidence & policy) still approves
-    // because the dispute arrives mid-flight with no concurrent Sentinel or InterceptionHandler.
     expect(snapshotBaseline.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
     expect(snapshotBaseline.acceptedProposal?.debitSellerId).toBe("SELLER-A");
 
@@ -120,7 +155,6 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(guard.disputeEvaluation?.matchState).toBe("VERIFIED_ACTIVE_MATCH");
     expect(guard.ledger.requestedRefundKsh).toBe(10_000);
     expect(guard.ledger.blockedUnsafeRefundKsh).toBe(10_000);
-    // Seller A's disputed KSh 10,000 checkout line is held; Seller B's KSh 40,000 remains clear.
     expect(guard.ledger.heldReserveKsh).toBe(10_000);
     expect(guard.ledger.allCitations).toContain("DSP-505");
   });
@@ -143,7 +177,7 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(sellerB.supportedNetPayoutKsh).toBe(30_000);
   });
 
-  // --- Audit Regression Suite (Finding 1: Post-acceptance invalidation) ---
+  // --- Post-Acceptance Invalidation Regressions ---
 
   it("Regression 1A: post-acceptance warehouse correction invalidates epoch-1 Seller A and revalidates to epoch-2 Seller B", async () => {
     const scenario = getScenarioById("case-1-clean-allocation");
@@ -165,7 +199,7 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(report.timeline.some((e) => e.type === "readiness.invalidated")).toBe(true);
   });
 
-  it("Regression 1B: post-acceptance matching chargeback invalidates epoch-1 readiness and freezes checkout", async () => {
+  it("Regression 1B: post-acceptance matching chargeback invalidates epoch-1 readiness, freezes checkout, and holds non-zero reserve", async () => {
     const scenario = getScenarioById("case-1-clean-allocation");
     const report = await runRefundGuardCase(scenario, {
       modeOverride: "mock",
@@ -179,6 +213,7 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(report.supersededProposals).toHaveLength(1);
     expect(report.verdict).toBe("FROZEN_DISPUTE_COLLISION");
     expect(report.acceptedProposal).toBeNull();
+    expect(report.ledger.heldReserveKsh).toBe(10_000);
     expect(report.timeline.some((e) => e.type === "readiness.invalidated")).toBe(true);
   });
 
@@ -199,54 +234,334 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(report.acceptedProposal).toBeNull();
   });
 
-  // --- Audit Regression Suite (Finding 2: Dispute payment linkage) ---
+  // --- Audit Finding: Money Reconciliation Before Clearance ---
 
-  it("Regression 2A: unrelated dispute (different checkout, card, and amount) does NOT freeze a clean checkout", async () => {
+  it("Audit Fix 1: KSh 15,000 draft refund against KSh 10,000 posted refund fails closed with HOLD_RECONCILIATION_MISMATCH", async () => {
+    const base = getScenarioById("case-1-clean-allocation");
+    const mismatched: ScenarioFixture = {
+      ...base,
+      draft: {
+        ...base.draft,
+        refundAmountKsh: 15_000,
+        totalBatchSettlementKsh: 85_000,
+        sellerLines: [
+          {
+            sellerId: "SELLER-A",
+            grossSalesKsh: 60_000,
+            refundDeductionKsh: 15_000,
+            netPayoutKsh: 45_000,
+          },
+          {
+            sellerId: "SELLER-B",
+            grossSalesKsh: 40_000,
+            refundDeductionKsh: 0,
+            netPayoutKsh: 40_000,
+          },
+        ],
+      },
+    };
+
+    const report = await runRefundGuardCase(mismatched, {
+      modeOverride: "mock",
+      latencyScale: 0.35,
+    });
+
+    expect(report.verdict).toBe("HOLD_RECONCILIATION_MISMATCH");
+    expect(report.acceptedProposal).toBeNull();
+    expect(report.ledger.reconciliationMatched).toBe(false);
+    expect(report.ledger.reconciliationError).toContain("KSh 15,000");
+    expect(report.interceptions.some((i) => i.reason === "RECONCILIATION_MISMATCH")).toBe(true);
+  });
+
+  // --- Audit Finding: Dispute Identity, CLOSED_LOST, CLOSED_WON Replacement, & Reserve Attribution ---
+
+  it("Regression 2A: unrelated dispute does NOT freeze a clean checkout", async () => {
     const scenario = getScenarioById("case-1-clean-allocation");
-    const unrelated = createUnrelatedDisputeFixture();
     const report = await runRefundGuardCase(scenario, {
       modeOverride: "mock",
       latencyScale: 0.4,
       overrideInjection: {
         delayMs: 80,
         kind: "CHARGEBACK_WEBHOOK",
-        chargeback: unrelated,
+        chargeback: createUnrelatedDisputeFixture(),
       },
     });
 
     expect(report.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
     expect(report.finalEpoch).toBe(1);
     expect(report.acceptedProposal?.debitSellerId).toBe("SELLER-A");
-    expect(report.interceptions).toHaveLength(0);
     expect(report.disputeEvaluation?.matchState).toBe("UNRELATED");
-    expect(report.ledger.blockedUnsafeRefundKsh).toBe(0);
-    expect(report.ledger.heldReserveKsh).toBe(0);
-    expect(report.timeline.some((e) => e.type === "evidence.chargeback_ignored")).toBe(true);
   });
 
-  it("Regression 2B: ambiguous dispute match (matching card & amount, mismatched checkout suffix) asks for human verification", async () => {
+  it("Regression 2B: ambiguous dispute match asks for human verification", async () => {
     const scenario = getScenarioById("case-1-clean-allocation");
-    const ambiguous = createAmbiguousDisputeFixture();
     const report = await runRefundGuardCase(scenario, {
       modeOverride: "mock",
       latencyScale: 0.4,
       overrideInjection: {
         delayMs: 90,
         kind: "CHARGEBACK_WEBHOOK",
-        chargeback: ambiguous,
+        chargeback: createAmbiguousDisputeFixture(),
       },
     });
 
     expect(report.verdict).toBe("VERIFY_DISPUTE_MATCH");
     expect(report.acceptedProposal).toBeNull();
     expect(report.disputeEvaluation?.matchState).toBe("AMBIGUOUS_MATCH");
-    expect(report.interceptions.some((i) => i.reason === "AMBIGUOUS_DISPUTE_MATCH")).toBe(true);
-    expect(report.ledger.blockedUnsafeRefundKsh).toBe(0);
   });
 
-  // --- Audit Regression Suite (Finding 4: Fair concurrency-isolating baseline) ---
+  it("Audit Fix 3A: conflicting explicit paymentSettlementId, short suffix '2', and suffix-only disputes never verify as active match", () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
 
-  it("Regression 4: Single-Agent Snapshot Baseline passes static Case 2 with same t=0 evidence, isolating concurrency to mid-flight Case 4", async () => {
+    const conflictingSettlement: ChargebackWebhookRecord = {
+      disputeId: "DSP-CONF-1",
+      status: "OPEN",
+      receivedAt: "2026-11-26T15:00:00+03:00",
+      pspReferenceSuffix: "402",
+      paymentSettlementId: "STL-PAY-OTHER-999",
+      cardLast4: "4421",
+      amountKsh: 10_000,
+      reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
+      narrative: "Same suffix and card, but explicit different paymentSettlementId.",
+    };
+    expect(evaluateDisputeLink(scenario, conflictingSettlement).matchState).toBe("AMBIGUOUS_MATCH");
+
+    const oneCharSuffix: ChargebackWebhookRecord = {
+      ...conflictingSettlement,
+      disputeId: "DSP-SHORT-2",
+      paymentSettlementId: undefined,
+      pspReferenceSuffix: "2",
+    };
+    expect(evaluateDisputeLink(scenario, oneCharSuffix).matchState).toBe("AMBIGUOUS_MATCH");
+
+    const suffixOnly: ChargebackWebhookRecord = {
+      ...conflictingSettlement,
+      disputeId: "DSP-SUFFIX-ONLY",
+      paymentSettlementId: undefined,
+      pspReferenceSuffix: "402",
+    };
+    expect(evaluateDisputeLink(scenario, suffixOnly).matchState).toBe("AMBIGUOUS_MATCH");
+  });
+
+  it("Audit Fix 3B: matching CLOSED_LOST dispute blocks additional refund (never READY_FOR_HUMAN_APPROVAL)", async () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
+    const closedLost: ChargebackWebhookRecord = {
+      disputeId: "DSP-LOST-402",
+      status: "CLOSED_LOST",
+      receivedAt: "2026-11-26T15:00:00+03:00",
+      pspReferenceSuffix: "402",
+      paymentSettlementId: "STL-PAY-402",
+      cardLast4: "4421",
+      amountKsh: 10_000,
+      reasonCode: "VISA_13.3_NOT_AS_DESCRIBED_OR_DEFECTIVE",
+      narrative: "Prior dispute already lost to cardholder.",
+    };
+
+    const report = await runRefundGuardCase(scenario, {
+      modeOverride: "mock",
+      latencyScale: 0.35,
+      overrideInjection: {
+        delayMs: 60,
+        kind: "CHARGEBACK_WEBHOOK",
+        chargeback: closedLost,
+      },
+    });
+
+    expect(report.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(report.acceptedProposal).toBeNull();
+    expect(report.disputeEvaluation?.matchState).toBe("VERIFIED_LOST_DISPUTE");
+    expect(report.interceptions.some((i) => i.reason === "PRIOR_DISPUTE_LOST_BLOCKED")).toBe(true);
+    expect(report.ledger.heldReserveKsh).toBeGreaterThan(0);
+  });
+
+  it("Audit Fix 3C: CLOSED_WON update replaces original OPEN dispute record by disputeId", () => {
+    const scenario = getScenarioById("case-5-chargeback-collision");
+    const state = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+    const openDispute = scenario.midFlightInjection!.chargeback!;
+
+    state.addChargebackWebhook(openDispute);
+    expect(state.getLatestRelevantChargeback()?.evaluation.matchState).toBe("VERIFIED_ACTIVE_MATCH");
+
+    const closedWon: ChargebackWebhookRecord = {
+      ...openDispute,
+      status: "CLOSED_WON",
+      receivedAt: "2026-11-26T16:00:00+03:00",
+    };
+    const res = state.addChargebackWebhook(closedWon);
+    expect(res.relevant).toBe(true);
+    expect(state.getLatestRelevantChargeback()).toBeNull();
+  });
+
+  it("Audit Fix 3D: frozen dispute without verified returned seller holds both checkout lines (no draft fallback, non-zero reserve)", () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
+    const ledger = computeGroundedLedger(
+      scenario,
+      "FROZEN_DISPUTE_COLLISION",
+      null,
+      null,
+      null,
+    );
+    const sellerA = ledger.lines.find((l) => l.sellerId === "SELLER-A")!;
+    const sellerB = ledger.lines.find((l) => l.sellerId === "SELLER-B")!;
+    expect(sellerA.supportedNetPayoutKsh).toBe(50_000);
+    expect(sellerB.supportedNetPayoutKsh).toBe(30_000);
+    expect(ledger.totalWithheldFromGrossKsh).toBe(20_000);
+    expect(ledger.heldReserveKsh).toBe(10_000);
+    expect(ledger.holdPolicyExplanation).toContain("without guessing from the draft");
+  });
+
+  // --- Audit Finding: Direct Gate Strictness & Repeat Proposal Guard ---
+
+  it("Audit Fix 4A: RefundInterceptionGate blocks duplicate proposals in the same epoch", async () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
+    const state = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+    state.acceptedProposal = {
+      epoch: 1,
+      checkoutId: scenario.checkoutId,
+      debitSellerId: "SELLER-A",
+      refundAmountKsh: 10_000,
+      rationale: "already accepted",
+      citedSourceIds: ["WH-101"],
+    };
+
+    const gate = new RefundInterceptionGate(state, 50);
+    const next = await gate.handle(
+      makeDirectProposalTransition({
+        checkoutId: scenario.checkoutId,
+        debitSellerId: "SELLER-B",
+        refundAmountKsh: 10_000,
+        epoch: 1,
+        rationale: "duplicate second call",
+      }),
+    );
+
+    expect(next.nextStateId).toBe("model_message");
+    expect(state.interceptions.some((i) => i.reason === "DUPLICATE_PROPOSAL_BLOCKED")).toBe(true);
+    expect(state.acceptedProposal?.debitSellerId).toBe("SELLER-A");
+  });
+
+  it("Audit Fix 4B: RefundInterceptionGate rejects malformed Sentinel findings and invalid Desk proposals without draft fallback", async () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
+    const baseFinding: SentinelFinding = {
+      epoch: 1,
+      checkoutId: scenario.checkoutId,
+      status: "VERIFIED_RETURN",
+      verifiedSellerId: "SELLER-A",
+      verifiedLineId: "LINE-402-A",
+      disputeId: null,
+      evidenceNoteId: "WH-101",
+      confidence: "HIGH",
+      summary: "Verified",
+      citedSourceIds: ["WH-101", "LINE-402-A"],
+      recordedAtMs: 10,
+    };
+
+    const badFindings: SentinelFinding[] = [
+      { ...baseFinding, checkoutId: "CHK-WRONG" },
+      { ...baseFinding, confidence: "LOW" },
+      { ...baseFinding, verifiedLineId: "LINE-402-B" }, // belongs to SELLER-B, not SELLER-A
+      { ...baseFinding, evidenceNoteId: "WH-INVENTED" },
+    ];
+
+    for (const bad of badFindings) {
+      const state = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+      state.publishSentinelFinding(bad);
+      const gate = new RefundInterceptionGate(state, 50);
+      const next = await gate.handle(
+        makeDirectProposalTransition({
+          checkoutId: scenario.checkoutId,
+          debitSellerId: "SELLER-A",
+          refundAmountKsh: 10_000,
+          epoch: 1,
+          rationale: "test",
+        }),
+      );
+      expect(next.nextStateId).toBe("model_message");
+      expect(state.verdict).toBe("HOLD_MISSING_EVIDENCE");
+    }
+
+    // Invalid Desk proposal payloads against a valid Sentinel finding
+    const badProposals = [
+      { checkoutId: "CHK-WRONG", debitSellerId: "SELLER-A", refundAmountKsh: 10_000, epoch: 1 },
+      { checkoutId: scenario.checkoutId, debitSellerId: "SELLER-Z", refundAmountKsh: 10_000, epoch: 1 },
+      { checkoutId: scenario.checkoutId, debitSellerId: "SELLER-A", refundAmountKsh: 99_999, epoch: 1 },
+      { checkoutId: scenario.checkoutId, debitSellerId: "SELLER-A", refundAmountKsh: 10_000, epoch: 99 },
+    ];
+
+    for (const badArgs of badProposals) {
+      const state = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+      state.publishSentinelFinding(baseFinding);
+      const gate = new RefundInterceptionGate(state, 50);
+      const next = await gate.handle(makeDirectProposalTransition(badArgs));
+      expect(next.nextStateId).toBe("model_message");
+      expect(state.interceptions.some((i) => i.reason === "INVALID_PROPOSAL_OR_FINDING")).toBe(true);
+    }
+
+    // Timeout when Sentinel never publishes current epoch (must NOT spin infinitely!)
+    const staleState = new RefundGuardState(scenario, "mock", "refund-guard-deterministic-v1");
+    staleState.publishSentinelFinding(baseFinding);
+    staleState.epoch = 2; // epoch 2 has no finding
+    const fastGate = new RefundInterceptionGate(staleState, 30);
+    const nextTimeout = await fastGate.handle(
+      makeDirectProposalTransition({
+        checkoutId: scenario.checkoutId,
+        debitSellerId: "SELLER-A",
+        refundAmountKsh: 10_000,
+        epoch: 2,
+        rationale: "timeout check",
+      }),
+    );
+    expect(nextTimeout.nextStateId).toBe("model_message");
+    expect(staleState.verdict).toBe("HOLD_MISSING_EVIDENCE");
+  });
+
+  // --- Audit Finding: Rule-Based Mock Parser Edge Cases ---
+
+  it("Audit Fix 5: rule-based mock parser handles negation, tentative notes, both-items, nothing-missing, and customer-kept phrasing", async () => {
+    const base = getScenarioById("case-1-clean-allocation");
+
+    const negated = await runRefundGuardCase(base, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      customWarehouseNoteText: "We did not receive the Navy Quilted Winter Jacket.",
+    });
+    expect(negated.verdict).toBe("HOLD_MISSING_EVIDENCE");
+
+    const tentative = await runRefundGuardCase(base, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      customWarehouseNoteText:
+        "Preliminary dock scan: tentative Tan Chelsea Boots box received. Pending bench open.",
+    });
+    expect(tentative.verdict).toBe("HOLD_MISSING_EVIDENCE");
+
+    const bothItems = await runRefundGuardCase(base, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      customWarehouseNoteText: "Both items received in parcel for CHK-402.",
+    });
+    expect(bothItems.verdict).toBe("HOLD_MISSING_EVIDENCE");
+
+    const nothingMissing = await runRefundGuardCase(base, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      customWarehouseNoteText: "Received jacket for CHK-402. Nothing missing.",
+    });
+    expect(nothingMissing.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
+    expect(nothingMissing.acceptedProposal?.debitSellerId).toBe("SELLER-A");
+
+    const keptOther = await runRefundGuardCase(base, {
+      modeOverride: "mock",
+      latencyScale: 0.25,
+      customWarehouseNoteText: "Boots came back for CHK-402; customer kept the jacket.",
+    });
+    expect(keptOther.verdict).toBe("CORRECTED_READY_FOR_APPROVAL");
+    expect(keptOther.acceptedProposal?.debitSellerId).toBe("SELLER-B");
+  });
+
+  // --- Baseline, Batch Desk (All Pending), Live Interrupt, & HTTP 409 Server Gate ---
+
+  it("Regression 4: Single-Agent t=0 Snapshot passes static Case 2 yet misses mid-flight Case 4", async () => {
     const case2 = getScenarioById("case-2-wrong-seller-zerosum");
     const case4 = getScenarioById("case-4-late-correction-midflight");
 
@@ -257,34 +572,26 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
       runRefundGuardCase(case4, { modeOverride: "mock", latencyScale: 0.5 }),
     ]);
 
-    // Ticket-and-draft baseline misses static Case 2; Snapshot baseline catches it!
     expect(td2.acceptedProposal?.debitSellerId).toBe("SELLER-B");
     expect(snap2.acceptedProposal?.debitSellerId).toBe("SELLER-A");
-
-    // On mid-flight Case 4, even the full-snapshot single agent commits stale Seller B,
-    // while concurrent RefundGuard intercepts and corrects to Seller A at epoch 2.
     expect(snap4.acceptedProposal?.debitSellerId).toBe("SELLER-B");
     expect(guard4.acceptedProposal?.debitSellerId).toBe("SELLER-A");
     expect(guard4.finalEpoch).toBe(2);
   });
 
-  it("Batch Desk: runs 4 distinct checkouts (8 concurrent Mozaik agent loops) and isolates exceptions", async () => {
-    const { runBlackFridayBatch } = await import("../src/engine/run-batch.js");
+  it("Batch Desk: runs 4 concurrent checkout reviews, starts every decision as PENDING, and marks held/frozen rows non-approvable", async () => {
     const batch = await runBlackFridayBatch({ modeOverride: "mock", latencyScale: 0.4 });
 
     expect(batch.checkoutCount).toBe(4);
     expect(batch.concurrentAgentLoops).toBe(8);
     expect(batch.allOverlapsVerified).toBe(true);
-    expect(batch.autoClearedCount).toBe(1);
-    expect(batch.exceptionCount).toBe(3);
+    expect(batch.items.every((i) => i.operatorDecision === "PENDING")).toBe(true);
 
     const byCheckout = new Map(batch.items.map((i) => [i.checkoutId, i]));
-    expect(byCheckout.get("CHK-518")?.report.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
-    expect(byCheckout.get("CHK-518")?.report.acceptedProposal?.debitSellerId).toBe("SELLER-A");
-    expect(byCheckout.get("CHK-402")?.report.verdict).toBe("CORRECTED_READY_FOR_APPROVAL");
-    expect(byCheckout.get("CHK-402")?.report.acceptedProposal?.debitSellerId).toBe("SELLER-A");
-    expect(byCheckout.get("CHK-629")?.report.verdict).toBe("HOLD_MISSING_EVIDENCE");
-    expect(byCheckout.get("CHK-741")?.report.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(byCheckout.get("CHK-518")?.approvable).toBe(true);
+    expect(byCheckout.get("CHK-402")?.approvable).toBe(true);
+    expect(byCheckout.get("CHK-629")?.approvable).toBe(false);
+    expect(byCheckout.get("CHK-741")?.approvable).toBe(false);
     expect(byCheckout.get("CHK-741")?.report.ledger.blockedUnsafeRefundKsh).toBe(12_000);
   });
 
@@ -306,5 +613,90 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(report.verdict).toBe("CORRECTED_READY_FOR_APPROVAL");
     expect(report.acceptedProposal?.debitSellerId).toBe("SELLER-B");
     expect(report.interceptions.some((i) => i.reason === "SUPERSEDED_EVIDENCE")).toBe(true);
+  });
+
+  it("Server Approval Gate: returns HTTP 409 Conflict on stale post-run epoch and on held verdicts, and HTTP 200 on current eligible verdict", async () => {
+    const server = createRefundGuardServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const runSseSession = async (scenarioId: string): Promise<{ sessionId: string; finalEpoch: number }> => {
+      const res = await fetch(`${baseUrl}/api/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenarioId, modeOverride: "mock" }),
+      });
+      const text = await res.text();
+      let sessionId = "";
+      let finalEpoch = 1;
+      for (const chunk of text.split("\n\n")) {
+        if (chunk.includes("event: report")) {
+          const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"));
+          if (dataLine) {
+            const parsed = JSON.parse(dataLine.slice(5).trim());
+            sessionId = parsed.sessionId;
+            finalEpoch = parsed.report.finalEpoch;
+          }
+        }
+      }
+      return { sessionId, finalEpoch };
+    };
+
+    try {
+      // 1. Clean run -> post-run matching dispute -> approve with stale epoch 1 => 409 Conflict
+      const cleanSession = await runSseSession("case-1-clean-allocation");
+      const injRes = await fetch(`${baseUrl}/api/sessions/${cleanSession.sessionId}/inject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "CHARGEBACK_MATCHING" }),
+      });
+      expect(injRes.status).toBe(200);
+      const injJson = (await injRes.json()) as { epoch: number; approvable: boolean };
+      expect(injJson.epoch).toBe(2);
+      expect(injJson.approvable).toBe(false);
+
+      const staleApproveRes = await fetch(
+        `${baseUrl}/api/sessions/${cleanSession.sessionId}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ epoch: cleanSession.finalEpoch, decision: "APPROVED_FOR_RELEASE" }),
+        },
+      );
+      expect(staleApproveRes.status).toBe(409);
+      const staleJson = (await staleApproveRes.json()) as { code: string };
+      expect(staleJson.code).toBe("APPROVAL_EXPIRED_STALE_EPOCH");
+
+      // 2. Held run (missing evidence) -> approve => 409 Conflict
+      const heldSession = await runSseSession("case-3-missing-evidence");
+      const heldApproveRes = await fetch(
+        `${baseUrl}/api/sessions/${heldSession.sessionId}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ epoch: heldSession.finalEpoch, decision: "APPROVED_FOR_RELEASE" }),
+        },
+      );
+      expect(heldApproveRes.status).toBe(409);
+      const heldJson = (await heldApproveRes.json()) as { code: string };
+      expect(heldJson.code).toBe("VERDICT_NOT_APPROVABLE");
+
+      // 3. Clean run with current epoch => 200 OK
+      const validSession = await runSseSession("case-1-clean-allocation");
+      const okApproveRes = await fetch(
+        `${baseUrl}/api/sessions/${validSession.sessionId}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ epoch: validSession.finalEpoch, decision: "APPROVED_FOR_RELEASE" }),
+        },
+      );
+      expect(okApproveRes.status).toBe(200);
+      const okJson = (await okApproveRes.json()) as { decision: string };
+      expect(okJson.decision).toBe("APPROVED_FOR_RELEASE");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

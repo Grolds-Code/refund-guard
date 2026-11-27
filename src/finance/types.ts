@@ -80,6 +80,7 @@ export interface ChargebackWebhookRecord {
 
 export type DisputeMatchState =
   | "VERIFIED_ACTIVE_MATCH"
+  | "VERIFIED_LOST_DISPUTE"
   | "AMBIGUOUS_MATCH"
   | "UNRELATED"
   | "INACTIVE";
@@ -127,6 +128,7 @@ export type SentinelEvidenceStatus =
 
 export interface SentinelFinding {
   readonly epoch: number;
+  readonly checkoutId?: string;
   readonly status: SentinelEvidenceStatus;
   readonly verifiedSellerId: SellerId | null;
   readonly verifiedLineId: string | null;
@@ -152,12 +154,16 @@ export type InterceptionReason =
   | "MISSING_EVIDENCE"
   | "SUPERSEDED_EVIDENCE"
   | "UNSAFE_CROSS_SYSTEM_REFUND_BLOCKED"
-  | "AMBIGUOUS_DISPUTE_MATCH";
+  | "PRIOR_DISPUTE_LOST_BLOCKED"
+  | "AMBIGUOUS_DISPUTE_MATCH"
+  | "RECONCILIATION_MISMATCH"
+  | "INVALID_PROPOSAL_OR_FINDING"
+  | "DUPLICATE_PROPOSAL_BLOCKED";
 
 export interface InterceptionRecord {
   readonly timestampMs: number;
   readonly attemptNumber: number;
-  readonly blockedSellerId: SellerId;
+  readonly blockedSellerId: SellerId | "INVALID";
   readonly proposalEpoch: number;
   readonly currentEpoch: number;
   readonly reason: InterceptionReason;
@@ -170,9 +176,17 @@ export type FinalVerdict =
   | "READY_FOR_HUMAN_APPROVAL"
   | "CORRECTED_READY_FOR_APPROVAL"
   | "HOLD_MISSING_EVIDENCE"
+  | "HOLD_RECONCILIATION_MISMATCH"
   | "FROZEN_DISPUTE_COLLISION"
   | "VERIFY_DISPUTE_MATCH"
   | "PENDING_REVALIDATION";
+
+export function isVerdictApprovable(verdict: FinalVerdict): boolean {
+  return (
+    verdict === "READY_FOR_HUMAN_APPROVAL" ||
+    verdict === "CORRECTED_READY_FOR_APPROVAL"
+  );
+}
 
 export interface GroundedAllocationLine {
   readonly sellerId: SellerId;
@@ -196,8 +210,11 @@ export interface GroundedLedgerResult {
   readonly draftTotalKsh: number;
   readonly supportedTotalKsh: number;
   readonly totalStillMatchesExactly: boolean;
+  readonly reconciliationMatched: boolean;
+  readonly reconciliationError: string | null;
   readonly misallocationCaughtKsh: number;
   readonly blockedUnsafeRefundKsh: number;
+  readonly totalWithheldFromGrossKsh: number;
   readonly heldReserveKsh: number;
   readonly holdPolicyExplanation: string;
   readonly lines: readonly GroundedAllocationLine[];
