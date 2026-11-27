@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-11-27T08:27:10.820Z",
+  "capturedAt": "2026-11-27T16:06:27.646Z",
   "mode": "live",
   "modelName": "gpt-4o-mini",
   "postAcceptanceMode": true,
@@ -23,9 +23,9 @@
     "architecture": "refund-guard-concurrent",
     "verdict": "CORRECTED_READY_FOR_APPROVAL",
     "finalEpoch": 2,
-    "durationMs": 7310,
+    "durationMs": 8520,
     "concurrentOverlapVerified": true,
-    "overlapDetail": "RefundDesk [19ms..5068ms] overlapped DisputeFulfillmentSentinel [22ms..4735ms] for 4713ms",
+    "overlapDetail": "RefundDesk [41ms..5317ms] overlapped DisputeFulfillmentSentinel [45ms..5518ms] for 5272ms",
     "sentinelFinding": {
       "epoch": 2,
       "checkoutId": "CHK-402",
@@ -35,11 +35,13 @@
       "disputeId": null,
       "evidenceNoteId": "WH-404-V2",
       "confidence": "HIGH",
-      "summary": "Verified return of Navy Quilted Winter Jacket (SKU JKT-NVY-L) from Seller A received at the warehouse. Boots not returned.",
+      "summary": "Verified return of 1x Navy Quilted Winter Jacket from Seller A, confirmed by QC inspection.",
       "citedSourceIds": [
-        "WH-404-V2"
+        "WH-404-V2",
+        "CHK-402",
+        "STL-PAY-402"
       ],
-      "recordedAtMs": 5862
+      "recordedAtMs": 6651
     },
     "disputeEvaluation": null,
     "acceptedProposal": {
@@ -47,13 +49,14 @@
       "checkoutId": "CHK-402",
       "debitSellerId": "SELLER-A",
       "refundAmountKsh": 10000,
-      "rationale": "Approved refund for returned item as per policy.",
+      "rationale": "Refund requested for returned item confirmed by the customer, adhering to the Black Friday Refund policy.",
       "citedSourceIds": [
         "TKT-404",
         "DRF-404",
         "STL-PAY-402",
         "STL-REF-402",
-        "WH-404-V2"
+        "WH-404-V2",
+        "CHK-402"
       ]
     },
     "supersededProposals": [
@@ -62,12 +65,13 @@
         "checkoutId": "CHK-402",
         "debitSellerId": "SELLER-B",
         "refundAmountKsh": 10000,
-        "rationale": "Customer is returning one item as per the refund policy.",
+        "rationale": "Customer returned one item from checkout CHK-402.",
         "citedSourceIds": [
           "TKT-404",
           "DRF-404",
           "STL-PAY-402",
           "STL-REF-402",
+          "CHK-402",
           "WH-404-V1"
         ]
       }
@@ -79,6 +83,7 @@
       "batchGrossKsh": 100000,
       "confirmedRefundKsh": 10000,
       "requestedRefundKsh": 10000,
+      "pendingRefundKsh": 0,
       "netBatchTotalKsh": 90000,
       "draftTotalKsh": 90000,
       "supportedTotalKsh": 90000,
@@ -106,7 +111,8 @@
             "STL-PAY-402",
             "STL-REF-402",
             "LINE-402-A",
-            "WH-404-V2"
+            "WH-404-V2",
+            "CHK-402"
           ]
         },
         {
@@ -124,7 +130,8 @@
             "STL-PAY-402",
             "STL-REF-402",
             "LINE-402-B",
-            "WH-404-V2"
+            "WH-404-V2",
+            "CHK-402"
           ]
         }
       ],
@@ -135,13 +142,14 @@
         "STL-REF-402",
         "LINE-402-A",
         "WH-404-V2",
+        "CHK-402",
         "LINE-402-B"
       ]
     },
     "timeline": [
       {
         "seq": 1,
-        "elapsedMs": 19,
+        "elapsedMs": 41,
         "type": "case.opened",
         "actor": "OperatorFeed",
         "epoch": 1,
@@ -155,7 +163,7 @@
       },
       {
         "seq": 2,
-        "elapsedMs": 19,
+        "elapsedMs": 41,
         "type": "agent.loop_started",
         "actor": "RefundDeskAgent",
         "epoch": 1,
@@ -167,7 +175,7 @@
       },
       {
         "seq": 3,
-        "elapsedMs": 22,
+        "elapsedMs": 45,
         "type": "agent.loop_started",
         "actor": "DisputeFulfillmentSentinel",
         "epoch": 1,
@@ -179,7 +187,7 @@
       },
       {
         "seq": 4,
-        "elapsedMs": 2321,
+        "elapsedMs": 2908,
         "type": "mozaik.interception_started",
         "actor": "MozaikRuntime",
         "epoch": 1,
@@ -187,7 +195,7 @@
       },
       {
         "seq": 5,
-        "elapsedMs": 2322,
+        "elapsedMs": 2908,
         "type": "interception.inspecting",
         "actor": "RefundInterceptionGate",
         "epoch": 1,
@@ -200,26 +208,26 @@
       },
       {
         "seq": 6,
-        "elapsedMs": 3174,
+        "elapsedMs": 3936,
         "type": "sentinel.finding",
         "actor": "DisputeFulfillmentSentinel",
         "epoch": 1,
-        "message": "[epoch 1] VERIFIED_RETURN -> SELLER-B (LINE-402-B): 1x Tan Leather Chelsea Boots verified returned to warehouse.",
+        "message": "[epoch 1] VERIFIED_RETURN -> SELLER-B (LINE-402-B): Verified return for Tan Leather Chelsea Boots (SKU BTS-TAN-42) for Seller B confirmed by physical intake note.",
         "data": {
           "epoch": 1,
           "status": "VERIFIED_RETURN",
           "verifiedSellerId": "SELLER-B",
           "disputeId": null,
           "citedSourceIds": [
+            "CHK-402",
             "STL-PAY-402",
-            "STL-REF-402",
             "WH-404-V1"
           ]
         }
       },
       {
         "seq": 7,
-        "elapsedMs": 3175,
+        "elapsedMs": 3939,
         "type": "interception.cleared",
         "actor": "RefundInterceptionGate",
         "epoch": 1,
@@ -228,15 +236,15 @@
           "approvedSellerId": "SELLER-B",
           "epoch": 1,
           "citedSourceIds": [
+            "CHK-402",
             "STL-PAY-402",
-            "STL-REF-402",
             "WH-404-V1"
           ]
         }
       },
       {
         "seq": 8,
-        "elapsedMs": 3175,
+        "elapsedMs": 3939,
         "type": "mozaik.interception_finished",
         "actor": "MozaikRuntime",
         "epoch": 1,
@@ -244,7 +252,7 @@
       },
       {
         "seq": 9,
-        "elapsedMs": 3175,
+        "elapsedMs": 3940,
         "type": "proposal.accepted",
         "actor": "RefundDeskAgent",
         "epoch": 1,
@@ -258,13 +266,14 @@
             "DRF-404",
             "STL-PAY-402",
             "STL-REF-402",
+            "CHK-402",
             "WH-404-V1"
           ]
         }
       },
       {
         "seq": 10,
-        "elapsedMs": 3175,
+        "elapsedMs": 3942,
         "type": "readiness.invalidated",
         "actor": "RefundGuardState",
         "epoch": 2,
@@ -276,11 +285,11 @@
       },
       {
         "seq": 11,
-        "elapsedMs": 3175,
+        "elapsedMs": 3942,
         "type": "evidence.warehouse_updated",
         "actor": "WarehouseFeed",
         "epoch": 2,
-        "message": "Late warehouse correction WH-404-V2 arrived (epoch -> 2): CORRECTION superseding WH-404-V1: Opened the shoebox at QC bench. Inside is actually the Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Customer reused the boot box; boots were NOT returned.",
+        "message": "Late warehouse correction WH-404-V2 arrived (epoch -> 2): CORRECTION superseding WH-404-V1: Supervisor QC bench re-inspection opened the inner garment bag inside the reused shoebox. Inside is actually 1x Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Boots were NOT returned.",
         "data": {
           "noteId": "WH-404-V2",
           "epoch": 2,
@@ -289,7 +298,7 @@
       },
       {
         "seq": 12,
-        "elapsedMs": 3175,
+        "elapsedMs": 3942,
         "type": "agent.loop_started",
         "actor": "RefundDeskAgent",
         "epoch": 2,
@@ -301,7 +310,7 @@
       },
       {
         "seq": 13,
-        "elapsedMs": 3177,
+        "elapsedMs": 3950,
         "type": "agent.loop_started",
         "actor": "DisputeFulfillmentSentinel",
         "epoch": 2,
@@ -313,15 +322,43 @@
       },
       {
         "seq": 14,
-        "elapsedMs": 4623,
+        "elapsedMs": 5317,
+        "type": "agent.completed_stale",
+        "actor": "RefundDeskAgent",
+        "epoch": 2,
+        "message": "[STALE epoch 1 superseded by epoch 2] The refund proposal for KSh 10,000 has been successfully accepted for SELLER-B based on the customer's return of one item from checkout CHK-402.",
+        "data": {
+          "loopId": "b279c5f5-7347-4caa-8dd7-cb13bc74d9b3",
+          "loopEpoch": 1,
+          "staleLoopEpoch": 1,
+          "currentEpoch": 2
+        }
+      },
+      {
+        "seq": 15,
+        "elapsedMs": 5518,
+        "type": "agent.completed_stale",
+        "actor": "DisputeFulfillmentSentinel",
+        "epoch": 2,
+        "message": "[STALE epoch 1 superseded by epoch 2] The findings have been successfully published: a verified return for the Tan Leather Chelsea Boots (SKU BTS-TAN-42) for Seller B was confirmed by the physical intake note from the warehouse.",
+        "data": {
+          "loopId": "dc4cac4b-82af-40e4-8abd-d2c97c681653",
+          "loopEpoch": 1,
+          "staleLoopEpoch": 1,
+          "currentEpoch": 2
+        }
+      },
+      {
+        "seq": 16,
+        "elapsedMs": 6350,
         "type": "mozaik.interception_started",
         "actor": "MozaikRuntime",
         "epoch": 2,
         "message": "Mozaik runtime paused RefundDeskAgent transition for awaited InterceptionHandler."
       },
       {
-        "seq": 15,
-        "elapsedMs": 4623,
+        "seq": 17,
+        "elapsedMs": 6350,
         "type": "interception.inspecting",
         "actor": "RefundInterceptionGate",
         "epoch": 2,
@@ -333,41 +370,27 @@
         }
       },
       {
-        "seq": 16,
-        "elapsedMs": 4735,
-        "type": "agent.completed",
-        "actor": "DisputeFulfillmentSentinel",
-        "epoch": 2,
-        "message": "The finding has been published successfully: 1x Tan Leather Chelsea Boots from Seller B have been verified as returned to the warehouse."
-      },
-      {
-        "seq": 17,
-        "elapsedMs": 5068,
-        "type": "agent.completed",
-        "actor": "RefundDeskAgent",
-        "epoch": 2,
-        "message": "The refund proposal for KSh 10,000 to SELLER-B has been accepted successfully. The action has been processed in compliance with the refund policy regarding the customer's return."
-      },
-      {
         "seq": 18,
-        "elapsedMs": 5862,
+        "elapsedMs": 6652,
         "type": "sentinel.finding",
         "actor": "DisputeFulfillmentSentinel",
         "epoch": 2,
-        "message": "[epoch 2] VERIFIED_RETURN -> SELLER-A (LINE-402-A): Verified return of Navy Quilted Winter Jacket (SKU JKT-NVY-L) from Seller A received at the warehouse. Boots not returned.",
+        "message": "[epoch 2] VERIFIED_RETURN -> SELLER-A (LINE-402-A): Verified return of 1x Navy Quilted Winter Jacket from Seller A, confirmed by QC inspection.",
         "data": {
           "epoch": 2,
           "status": "VERIFIED_RETURN",
           "verifiedSellerId": "SELLER-A",
           "disputeId": null,
           "citedSourceIds": [
-            "WH-404-V2"
+            "WH-404-V2",
+            "CHK-402",
+            "STL-PAY-402"
           ]
         }
       },
       {
         "seq": 19,
-        "elapsedMs": 5862,
+        "elapsedMs": 6652,
         "type": "interception.cleared",
         "actor": "RefundInterceptionGate",
         "epoch": 2,
@@ -376,13 +399,15 @@
           "approvedSellerId": "SELLER-A",
           "epoch": 2,
           "citedSourceIds": [
-            "WH-404-V2"
+            "WH-404-V2",
+            "CHK-402",
+            "STL-PAY-402"
           ]
         }
       },
       {
         "seq": 20,
-        "elapsedMs": 5862,
+        "elapsedMs": 6652,
         "type": "mozaik.interception_finished",
         "actor": "MozaikRuntime",
         "epoch": 2,
@@ -390,7 +415,7 @@
       },
       {
         "seq": 21,
-        "elapsedMs": 5862,
+        "elapsedMs": 6652,
         "type": "proposal.accepted",
         "actor": "RefundDeskAgent",
         "epoch": 2,
@@ -404,25 +429,34 @@
             "DRF-404",
             "STL-PAY-402",
             "STL-REF-402",
-            "WH-404-V2"
+            "WH-404-V2",
+            "CHK-402"
           ]
         }
       },
       {
         "seq": 22,
-        "elapsedMs": 7070,
+        "elapsedMs": 7773,
         "type": "agent.completed",
         "actor": "DisputeFulfillmentSentinel",
         "epoch": 2,
-        "message": "The audit has been completed, and the return of the Navy Quilted Winter Jacket from Seller A has been verified. The finding has been published successfully."
+        "message": "The physical return of 1x Navy Quilted Winter Jacket from Seller A has been verified and published successfully.",
+        "data": {
+          "loopId": "34d2e2fe-311c-4a59-8696-569f426dad08",
+          "loopEpoch": 2
+        }
       },
       {
         "seq": 23,
-        "elapsedMs": 7309,
+        "elapsedMs": 8516,
         "type": "agent.completed",
         "actor": "RefundDeskAgent",
         "epoch": 2,
-        "message": "The refund proposal for the item returned from checkout CHK-402 has been accepted for SELLER-A, with a refund amount of KSh 10,000. The refund is based on the verified return and complies with the marketplace policy."
+        "message": "The refund proposal for the returned item from checkout ID CHK-402 has been successfully accepted. A refund of KSh 10,000 will be debited from Seller A (Nairobi Streetwear Co.) as per the Black Friday refund policy.",
+        "data": {
+          "loopId": "a2e97db4-60f1-4363-937e-4ffb22cfa294",
+          "loopEpoch": 2
+        }
       }
     ]
   }
