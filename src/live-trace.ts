@@ -37,11 +37,18 @@ async function main(): Promise<void> {
   }
 
   const args = process.argv.slice(2);
-  const scenarioId =
-    args.find((a) => !a.startsWith("--")) ?? "case-4-late-correction-midflight";
+  const outFlagIdx = args.indexOf("--out");
+  const customOut =
+    outFlagIdx >= 0 && args[outFlagIdx + 1]
+      ? join(__dirname, "..", args[outFlagIdx + 1])
+      : TRACE_OUT;
+  const positionalArgs = args.filter(
+    (a, idx) => !a.startsWith("--") && (outFlagIdx < 0 || idx !== outFlagIdx + 1),
+  );
+  const scenarioId = positionalArgs[0] ?? "case-4-late-correction-midflight";
   const postAcceptanceMode =
     args.includes("--post-acceptance") ||
-    (args.length === 0 && scenarioId === "case-4-late-correction-midflight");
+    (positionalArgs.length === 0 && scenarioId === "case-4-late-correction-midflight");
 
   const scenario = getScenarioById(scenarioId);
 
@@ -80,9 +87,9 @@ async function main(): Promise<void> {
     (i) => i.reason === "WRONG_SELLER_ALLOCATION" || i.reason === "SUPERSEDED_EVIDENCE",
   );
 
-  await mkdir(dirname(TRACE_OUT), { recursive: true });
+  await mkdir(dirname(customOut), { recursive: true });
   await writeFile(
-    TRACE_OUT,
+    customOut,
     JSON.stringify(
       {
         capturedAt: new Date().toISOString(),
@@ -120,7 +127,7 @@ async function main(): Promise<void> {
   console.log(`Wrong proposal blocked:     ${wrongProposalBlocked}`);
   console.log(`Reconciliation matched:     ${report.ledger.reconciliationMatched}`);
   console.log(`Concurrent overlap:         ${report.concurrentOverlapVerified} (${report.overlapDetail})`);
-  console.log(`Saved full trace to:        ${TRACE_OUT}`);
+  console.log(`Saved full trace to:        ${customOut}`);
 
   if (
     !sentinelPublished ||

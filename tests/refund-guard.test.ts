@@ -1016,6 +1016,8 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(sellerA.supportedNetPayoutKsh).toBe(50_000);
     expect(sellerB.supportedNetPayoutKsh).toBe(30_000);
     expect(snap.report.ledger.heldReserveKsh).toBe(20_000);
+    expect(snap.report.ledger.holdPolicyExplanation).toContain("superseded by");
+    expect(snap.report.ledger.holdPolicyExplanation).not.toContain("exceeds a single seller line");
   });
 
   it("Blocker 3: out-of-order CLOSED_WON (15:30) blocks older OPEN (14:30), and CHK-402 closure clears 402 OPEN while mismatched closure stays rejected", () => {

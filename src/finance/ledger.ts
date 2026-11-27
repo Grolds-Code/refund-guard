@@ -407,13 +407,20 @@ export function computeGroundedLedger(
         : "active dispute";
     holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Reserve held: ${formatKsh(heldReserveKsh)} (${verifiedDisputedSellerId}'s verified disputed exposure of ${formatKsh(verifiedDisputedSellerLineKsh)} held due to ${disputeKind}; undisputed seller payout remains clear).`;
   } else if (verdict === "FROZEN_DISPUTE_COLLISION") {
+    const obsoleteFinding =
+      sentinelFinding !== null && !findingMatchesLatestNote;
     const checkoutWide =
+      findingMatchesLatestNote &&
       activeDisputeAmountKsh !== null &&
       sentinelFinding?.verifiedSellerId !== null &&
       sentinelFinding?.confidence === "HIGH";
-    holdPolicyExplanation = checkoutWide
-      ? `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Checkout-wide dispute (${formatKsh(activeDisputeAmountKsh)}) exceeds a single seller line; holding both checkout lines (${formatKsh(totalWithheldFromGrossKsh)} withheld, ${formatKsh(heldReserveKsh)} cash reserve) for allocation review.`
-      : `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}; disputed seller line unverified so both checkout lines are held without guessing from the draft).`;
+    if (obsoleteFinding) {
+      holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Seller attribution is unresolved because prior warehouse finding (${sentinelFinding.evidenceNoteId}) was superseded by ${latestWarehouseNoteId}; holding both checkout lines (${formatKsh(totalWithheldFromGrossKsh)} withheld, ${formatKsh(heldReserveKsh)} cash reserve) until updated evidence is verified.`;
+    } else if (checkoutWide) {
+      holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Checkout-wide dispute (${formatKsh(activeDisputeAmountKsh)}) exceeds a single seller line; holding both checkout lines (${formatKsh(totalWithheldFromGrossKsh)} withheld, ${formatKsh(heldReserveKsh)} cash reserve) for allocation review.`;
+    } else {
+      holdPolicyExplanation = `Requested refund blocked: ${formatKsh(requestedRefundKsh)}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}; disputed seller line unverified so both checkout lines are held without guessing from the draft).`;
+    }
   } else if (verdict === "VERIFY_DISPUTE_MATCH") {
     holdPolicyExplanation = `Requested refund: ${formatKsh(requestedRefundKsh)}. Gross checkout lines withheld: ${formatKsh(totalWithheldFromGrossKsh)} (cash reserve held from net settlement: ${formatKsh(heldReserveKsh)}; both checkout lines held pending operator verification of ambiguous dispute match).`;
   } else if (verdict === "PENDING_REVALIDATION") {
