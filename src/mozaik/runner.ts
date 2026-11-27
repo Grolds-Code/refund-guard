@@ -441,6 +441,16 @@ function analyzeRefundDeskPrompt(
   };
 }
 
+const ALL_CONTEXT_ITEM_TYPES = [
+  "user_message",
+  "system_message",
+  "developer_message",
+  "reasoning",
+  "function_call",
+  "function_call_output",
+  "model_message",
+];
+
 export function resolveInferenceMode(options?: {
   modeOverride?: "auto" | "live" | "mock";
   latencyScale?: number;
@@ -484,7 +494,7 @@ export function resolveInferenceMode(options?: {
                 supportedReasoningEfforts: [],
                 supportsStreaming: true,
                 contextWindowSize: 128_000,
-                supportedContextItemTypes: ["message", "function_call", "function_call_output"],
+                supportedContextItemTypes: ALL_CONTEXT_ITEM_TYPES,
                 maxOutputTokens: 16_384,
                 supportsFunctionCalling: true,
                 supportsStructuredOutput: true,
@@ -515,7 +525,7 @@ export function resolveInferenceMode(options?: {
             supportedReasoningEfforts: [],
             supportsStreaming: false,
             contextWindowSize: 100_000,
-            supportedContextItemTypes: ["message", "function_call", "function_call_output"],
+            supportedContextItemTypes: ALL_CONTEXT_ITEM_TYPES,
             maxOutputTokens: 16_384,
             supportsFunctionCalling: true,
             supportsStructuredOutput: false,
