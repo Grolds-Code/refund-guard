@@ -74,7 +74,7 @@ flowchart LR
 
 ## 3. Quickstart & Reproducibility
 
-Requires **Node.js 20+** (verified on Node 22 & Node 26). No API key is required for full deterministic verification. All npm runtime scripts invoke `node --import tsx` directly to avoid standalone `tsx` IPC errors.
+Requires **Node.js 20+** (verified on Node 22, Node 24 & Node 26). No API key is required for full deterministic verification. All npm runtime scripts invoke `node --import tsx` directly to avoid standalone `tsx` IPC errors.
 
 ```bash
 git clone https://github.com/Grolds-Code/refund-guard.git
@@ -103,32 +103,52 @@ REFUND_GUARD_MODE=live
 REFUND_GUARD_MODEL=gpt-4o-mini
 ```
 
-Capture a live post-acceptance expiry trace:
+Capture live traces:
 
 ```bash
 node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance
+node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum --out traces/live-case2-trace.json
 ```
 
 ---
 
-## 4. Verified Live OpenAI Run (`traces/live-run-trace.json`)
+## 4. Verified Live OpenAI Runs (`traces/`)
 
-The committed trace at [`traces/live-run-trace.json`](traces/live-run-trace.json) was captured on **27 November 2026** against live OpenAI **`gpt-4o-mini`** using `node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance` (1 recorded run; the harness injects `WH-404-V2` immediately upon epoch-1 acceptance, using the earlier `WH-404-V1` text prior to tightening `WH-404-V1` to an explicit physical bench inspection):
+Both committed traces were captured on **27 November 2026** against live OpenAI **`gpt-4o-mini`** on the final codebase (with physical-inspection `WH-404-V1` / `WH-404-V2` notes and `loopId`-bound stale observer tracking).
+
+### 4A. Post-Acceptance Expiry & Stale-Loop Tagging (`traces/live-run-trace.json`)
+Command: `node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance` (total duration `8,520ms`; harness injects `WH-404-V2` immediately upon epoch-1 acceptance):
 
 | Timestamp | Epoch | Actor | Observed Event |
 | :--- | :---: | :--- | :--- |
-| `+19ms` / `+22ms` | 1 | `RefundDeskAgent` & `DisputeFulfillmentSentinel` | Both live `gpt-4o-mini` loops start concurrently on `CHK-402` (`DRF-404` / `WH-404-V1`). |
-| `+2321ms` | 1 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-B, epoch=1)` for **853ms** while awaiting Sentinel. |
-| `+3174ms` -> `+3175ms` | 1 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-B (LINE-402-B, WH-404-V1)`; gate clears and epoch 1 accepts `SELLER-B` once. |
-| `+3175ms` | 2 | `WarehouseFeed` (harness hook) -> `RefundGuardState` | Harness injects `WH-404-V2` on `proposal.accepted` (`epoch 1 -> 2`), fires `readiness.invalidated`, moves epoch-1 `SELLER-B` into `supersededProposals`, and spawns concurrent epoch-2 loops (`+3175ms` / `+3177ms`). |
-| `+4623ms` | 2 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-A, epoch=2)` for **1,239ms** while awaiting Sentinel's epoch-2 audit. *(Note: `RefundDeskAgent` does not see warehouse notes in its prompt; clearance occurs only after Sentinel publishes `WH-404-V2` at `+5862ms`.)* |
-| `+5862ms` | 2 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-A (LINE-402-A, WH-404-V2)`; gate verifies reconciliation & fields and accepts `SELLER-A` once (`CORRECTED_READY_FOR_APPROVAL`). |
+| `+41ms` / `+45ms` | 1 | `RefundDeskAgent` & `DisputeFulfillmentSentinel` | Both live `gpt-4o-mini` loops start concurrently on `CHK-402` (`DRF-404` / physical-inspection `WH-404-V1`). |
+| `+2908ms` | 1 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-B, epoch=1)` for **1,031ms** while awaiting Sentinel. |
+| `+3936ms` -> `+3940ms` | 1 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-B (LINE-402-B, WH-404-V1)`; gate clears and epoch 1 accepts `SELLER-B` once. |
+| `+3942ms` | 2 | `WarehouseFeed` (harness hook) -> `RefundGuardState` | Injects `WH-404-V2` on `proposal.accepted` (`epoch 1 -> 2`), fires `readiness.invalidated`, moves epoch-1 `SELLER-B` into `supersededProposals`, and launches concurrent epoch-2 loops (`+3942ms` / `+3950ms`). |
+| `+5317ms` / `+5518ms` | 2 | `AuditObserver` | Superseded epoch-1 completions are tagged `agent.completed_stale` (`[STALE epoch 1 superseded by epoch 2]`) via exact Mozaik `loopId` binding. |
+| `+6350ms` -> `+6652ms` | 2 | `RefundInterceptionGate` -> `Sentinel` -> `RefundDeskAgent` | Gate pauses epoch-2 `propose_refund(SELLER-A, epoch=2)` for **302ms** until Sentinel publishes `VERIFIED_RETURN -> SELLER-A (LINE-402-A, WH-404-V2)`; gate verifies reconciliation & citations and accepts `SELLER-A` once (`CORRECTED_READY_FOR_APPROVAL`). |
 
 **Observed checks (reported without omission):**
 - `expiredPriorAcceptance: true` (`supersededProposalCount: 1`, `SELLER-B` at epoch 1 superseded by `SELLER-A` at epoch 2).
-- `reconciliationMatched: true` (`A: KSh 50,000 / B: KSh 40,000`, total `KSh 90,000`).
-- `concurrentOverlapVerified: true` (`RefundDesk [19ms..5068ms]` overlapped `DisputeFulfillmentSentinel [22ms..4735ms]` for `4,713ms` on epoch 1, including awaited gate wait time).
-- `wrongProposalBlocked: false` (`interceptions: []`) and no duplicate proposal was attempted by `gpt-4o-mini` in this run; wrong-seller/stale-epoch rewrites and `DUPLICATE_PROPOSAL_BLOCKED` enforcement are verified deterministically in `npm test` (`Case 2`, `Case 4`, `Audit Fix 4A-4B`).
+- `reconciliationMatched: true` (`A: KSh 50,000 / B: KSh 40,000`, total `KSh 90,000`), `noDuplicateAcceptInAnyEpoch: true`.
+- `concurrentOverlapVerified: true` (`RefundDesk [41ms..5317ms]` overlapped `DisputeFulfillmentSentinel [45ms..5518ms]` for `5,272ms`, including awaited gate wait time).
+- `wrongProposalBlocked: false` (`interceptions: []`) in this post-acceptance expiry run.
+
+### 4B. Live Zero-Sum Wrong-Seller Interception & Rewrite (`traces/live-case2-trace.json`)
+Command: `node --import tsx src/live-trace.ts case-2-wrong-seller-zerosum --out traces/live-case2-trace.json` (total duration `5,709ms`):
+
+| Timestamp | Epoch | Actor | Observed Event |
+| :--- | :---: | :--- | :--- |
+| `+44ms` / `+48ms` | 1 | `RefundDeskAgent` & `DisputeFulfillmentSentinel` | Both live `gpt-4o-mini` loops start concurrently on `CHK-402` (`DRF-202` / `WH-202`). |
+| `+2139ms` | 1 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-B, epoch=1)` for **242ms** while awaiting Sentinel. |
+| `+2377ms` -> `+2381ms` | 1 | `Sentinel` -> `RefundInterceptionGate` | Sentinel publishes `VERIFIED_RETURN -> SELLER-A (LINE-402-A, WH-202)`; gate **blocks** `SELLER-B` with `WRONG_SELLER_ALLOCATION` (`actionTaken: REWRITE_AND_REPLAN`) and injects structured feedback into the intercepted transition. |
+| `+4378ms` -> `+4379ms` | 1 | `RefundDeskAgent` -> `RefundInterceptionGate` | Live `gpt-4o-mini` replans and submits `propose_refund(SELLER-A, epoch=1)`; gate verifies and accepts `SELLER-A` once (`CORRECTED_READY_FOR_APPROVAL`). |
+
+**Observed checks (reported without omission):**
+- `wrongProposalBlocked: true` (`interceptions: 1`, reason `WRONG_SELLER_ALLOCATION`, blocked `SELLER-B`, rewritten to `SELLER-A`).
+- `reconciliationMatched: true` (`A: KSh 50,000 / B: KSh 40,000`, total `KSh 90,000`), `noDuplicateAcceptInAnyEpoch: true`.
+- `concurrentOverlapVerified: true` (`RefundDesk [44ms..5704ms]` overlapped `DisputeFulfillmentSentinel [48ms..3622ms]` for `3,574ms`).
+- Duplicate same-epoch blocking (`DUPLICATE_PROPOSAL_BLOCKED`) and mid-flight stale-epoch rewrites are additionally verified deterministically in `npm test` (`Case 4`, `Audit Fix 4A-4B`).
 
 ---
 
@@ -229,7 +249,8 @@ src/
 public/
   index.html           # Responsive obsidian dark UI with post-run refresh & Try Stale Approval (409)
 traces/
-  live-run-trace.json  # Live OpenAI gpt-4o-mini post-acceptance expiry trace
+  live-run-trace.json   # Live OpenAI gpt-4o-mini post-acceptance expiry trace (Case 4)
+  live-case2-trace.json # Live OpenAI gpt-4o-mini wrong-seller interception & rewrite trace (Case 2)
 tests/
   refund-guard.test.ts # 32 Vitest tests (`npm test`)
 LICENSE                # MIT License
