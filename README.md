@@ -2,8 +2,11 @@
 
 **Concurrent Mozaik AI agents with awaited pre-execution interception and server-enforced epoch approvals that prevent wrong-seller refund misallocations, unreconciled clearances, stale post-acceptance approvals, and unsafe cross-system refund proposals before marketplace payouts release.**
 
+**Live Deployment:** [https://groldotieno97--refund-guard-demo-web.us-east.modal.run](https://groldotieno97--refund-guard-demo-web.us-east.modal.run) *(hosted on Modal in deterministic zero-key mode; supports live SSE streaming, post-run interrupts, HTTP 409 stale-epoch approval checks, Batch Desk, and 3-Way Benchmark)*
+
 | Project Detail | Value |
 | :--- | :--- |
+| **Live Demo** | [https://groldotieno97--refund-guard-demo-web.us-east.modal.run](https://groldotieno97--refund-guard-demo-web.us-east.modal.run) |
 | **Event & Track** | JigJoy Black Friday AI Hackathon (26-27 November 2026, Agents in Finance) |
 | **Runtime** | `@mozaik-ai/core@6.0.0` (TypeScript, Node.js 20+, MIT License) |
 | **Concurrency Model** | 2 concurrent `Agent` loops per checkout (`RefundDeskAgent` evidence-light proposer + `DisputeFulfillmentSentinel` evidence auditor) + shared `RuntimeState` + awaited `InterceptionHandler` + `AuditObserver` |
