@@ -21,11 +21,30 @@ export interface ResolvedInferenceMode {
   readonly inferenceRunnerConfig?: InferenceRunnerConfig;
 }
 
+interface ParsedOrderLine {
+  lineId: string;
+  sellerId: SellerId;
+  sellerName: string;
+  sku: string;
+  itemTitle: string;
+  keywords: string[];
+}
+
+const ALL_CONTEXT_ITEM_TYPES = [
+  "user_message",
+  "system_message",
+  "developer_message",
+  "reasoning",
+  "function_call",
+  "function_call_output",
+  "model_message",
+];
+
 /**
  * Deterministic Mozaik InferenceRunner that parses actual prompt content
- * (customer tickets, warehouse free-text notes, PSP dispute narratives,
- * and interception feedback) so automated tests and live judge edits
- * work reproducibly without requiring an external API key.
+ * (order lines, customer tickets, warehouse free-text notes, PSP dispute
+ * narratives, and interception feedback) so automated tests, multi-checkout
+ * batches, and live judge edits work reproducibly without an API key.
  */
 export class RefundGuardMockRunner implements InferenceRunner {
   private callCounter = 0;
@@ -225,10 +244,52 @@ export class RefundGuardMockRunner implements InferenceRunner {
   }
 }
 
+function parseOrderLinesFromPrompt(prompt: string): ParsedOrderLine[] {
+  const lines: ParsedOrderLine[] = [];
+  const regex =
+    /^-\s+([A-Z0-9-]+)\s+\|\s+(SELLER-[AB])\s+\(([^)]+)\)\s+\|\s+(?:SKU\s+)?([A-Z0-9-]+)\s+\|\s+([^|]+)\|/gm;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(prompt)) !== null) {
+    const lineId = match[1].trim();
+    const sellerId = match[2].trim() as SellerId;
+    const sellerName = match[3].trim();
+    const sku = match[4].trim();
+    const itemTitle = match[5].trim();
+
+    const stopWords = new Set([
+      "size",
+      "with",
+      "from",
+      "pack",
+      "set",
+      "and",
+      "the",
+      "for",
+      "ltd",
+      "co",
+    ]);
+    const rawTokens = `${sellerName} ${sku} ${itemTitle}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 4 && !stopWords.has(w));
+
+    lines.push({
+      lineId,
+      sellerId,
+      sellerName,
+      sku,
+      itemTitle,
+      keywords: Array.from(new Set(rawTokens)),
+    });
+  }
+  return lines;
+}
+
 /**
- * Natural-language parser for the Sentinel mock runner.
- * Evaluates actual warehouse note text and linked dispute signals present in
- * the prompt, so live judge edits immediately change findings.
+ * Dynamic natural-language parser for the Sentinel mock runner.
+ * Evaluates order lines, warehouse note text, and linked dispute signals present
+ * in the prompt, supporting arbitrary Black Friday checkouts and live judge edits.
  */
 function analyzeSentinelEvidence(prompt: string): {
   epoch: number;
@@ -242,9 +303,14 @@ function analyzeSentinelEvidence(prompt: string): {
   citedSourceIds: string[];
 } {
   const epoch = extractInt(prompt, /CURRENT_EPOCH:\s*(\d+)/i, 1);
+  const checkoutId = extractString(prompt, /CHECKOUT_ID:\s*([A-Z0-9-]+)/i, "CHK-402");
+  const settlementId = extractString(prompt, /-\s+(STL-PAY-[A-Z0-9-]+)/i, "STL-PAY-402");
   const noteId = extractString(prompt, /WAREHOUSE_NOTE_ID:\s*([A-Z0-9-]+)/i, "WH-UNKNOWN");
   const noteText = extractSection(prompt, "WAREHOUSE_NOTE_TEXT:", "CHARGEBACK_SECTION:");
   const chargebackSection = extractSection(prompt, "CHARGEBACK_SECTION:", "END_EVIDENCE");
+  const orderLines = parseOrderLinesFromPrompt(prompt);
+
+  const matchedLine = inferWarehouseOrderLine(noteText, orderLines);
 
   // 1. Evaluate dispute linkage if present in CHARGEBACK_SECTION
   if (chargebackSection.length > 0 && !/^NONE$/i.test(chargebackSection.trim())) {
@@ -268,18 +334,13 @@ function analyzeSentinelEvidence(prompt: string): {
       return {
         epoch,
         status: "DISPUTE_COLLISION",
-        verifiedSellerId: inferWarehouseSeller(noteText) ?? "NONE",
-        verifiedLineId:
-          inferWarehouseSeller(noteText) === "SELLER-A"
-            ? "LINE-402-A"
-            : inferWarehouseSeller(noteText) === "SELLER-B"
-              ? "LINE-402-B"
-              : "NONE",
+        verifiedSellerId: matchedLine?.sellerId ?? "NONE",
+        verifiedLineId: matchedLine?.lineId ?? "NONE",
         disputeId,
         evidenceNoteId: noteId,
         confidence: "HIGH",
-        summary: `Verified active PSP dispute ${disputeId} linked to checkout CHK-402 / STL-PAY-402. Block unsafe cross-system refund proposal.`,
-        citedSourceIds: [disputeId, noteId, "STL-PAY-402"],
+        summary: `Verified active PSP dispute ${disputeId} linked to ${checkoutId} / ${settlementId}. Block unsafe cross-system refund proposal.`,
+        citedSourceIds: [disputeId, noteId, settlementId],
       };
     }
 
@@ -292,8 +353,8 @@ function analyzeSentinelEvidence(prompt: string): {
         disputeId,
         evidenceNoteId: noteId,
         confidence: "LOW",
-        summary: `Dispute ${disputeId} partially matches payment signals for CHK-402; operator verification required before releasing payout.`,
-        citedSourceIds: [disputeId, noteId, "STL-PAY-402"],
+        summary: `Dispute ${disputeId} partially matches payment signals for ${checkoutId}; operator verification required before releasing payout.`,
+        citedSourceIds: [disputeId, noteId, settlementId],
       };
     }
   }
@@ -318,33 +379,18 @@ function analyzeSentinelEvidence(prompt: string): {
     };
   }
 
-  // 3. Determine which seller's item physically came back from free-text note.
-  const seller = inferWarehouseSeller(noteText);
-  if (seller === "SELLER-A") {
+  // 3. Return verified seller line match
+  if (matchedLine) {
     return {
       epoch,
       status: "VERIFIED_RETURN",
-      verifiedSellerId: "SELLER-A",
-      verifiedLineId: "LINE-402-A",
+      verifiedSellerId: matchedLine.sellerId,
+      verifiedLineId: matchedLine.lineId,
       disputeId: "NONE",
       evidenceNoteId: noteId,
       confidence: "HIGH",
-      summary: `Verified physical return of Navy Quilted Winter Jacket (LINE-402-A / SELLER-A) from ${noteId}.`,
-      citedSourceIds: [noteId, "LINE-402-A"],
-    };
-  }
-
-  if (seller === "SELLER-B") {
-    return {
-      epoch,
-      status: "VERIFIED_RETURN",
-      verifiedSellerId: "SELLER-B",
-      verifiedLineId: "LINE-402-B",
-      disputeId: "NONE",
-      evidenceNoteId: noteId,
-      confidence: "HIGH",
-      summary: `Verified physical return of Tan Leather Chelsea Boots (LINE-402-B / SELLER-B) from ${noteId}.`,
-      citedSourceIds: [noteId, "LINE-402-B"],
+      summary: `Verified physical return of ${matchedLine.itemTitle} (${matchedLine.lineId} / ${matchedLine.sellerId}) from ${noteId}.`,
+      citedSourceIds: [noteId, matchedLine.lineId],
     };
   }
 
@@ -356,33 +402,105 @@ function analyzeSentinelEvidence(prompt: string): {
     disputeId: "NONE",
     evidenceNoteId: noteId,
     confidence: "LOW",
-    summary: `Warehouse note ${noteId} is ambiguous between Seller A and Seller B; holding for human inspection.`,
+    summary: `Warehouse note ${noteId} is ambiguous between sellers; holding for human inspection.`,
     citedSourceIds: [noteId],
   };
 }
 
-function inferWarehouseSeller(noteText: string): SellerId | null {
+function inferWarehouseOrderLine(
+  noteText: string,
+  orderLines: readonly ParsedOrderLine[],
+): ParsedOrderLine | null {
   const lowerNote = noteText.toLowerCase();
-  const negatedBoots =
-    /(no boots|boots were not|boots not returned|reused the boot box|inside is actually[^.!;\n]*jacket)/i.test(
-      lowerNote,
-    );
-  const negatedJacket =
-    /(no jacket|jacket was not|jacket not returned|reused the jacket|inside is actually[^.!;\n]*boots)/i.test(
-      lowerNote,
-    );
 
+  // Split into clauses so negations ("boots were NOT returned", "no boots in parcel")
+  // only suppress the negated clause rather than the positive return clause.
+  const positiveClauses = lowerNote
+    .split(/[.;!\n]+/)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0)
+    .filter(
+      (c) =>
+        !/\b(was not|were not|not returned|not in parcel|no boots|no jacket|kept by|reused the .* box)\b/i.test(
+          c,
+        ),
+    );
+  const positiveText = positiveClauses.join(" | ");
+
+  // Dynamic scoring against parsed ORDER_LINES from the prompt
+  if (orderLines.length > 0) {
+    const scored = orderLines.map((line) => {
+      let score = 0;
+      if (positiveText.includes(line.lineId.toLowerCase())) score += 10;
+      if (positiveText.includes(line.sku.toLowerCase())) score += 10;
+      if (positiveText.includes(line.sellerId.toLowerCase())) score += 6;
+      if (positiveText.includes(line.sellerName.toLowerCase())) score += 6;
+      if (
+        line.sellerId === "SELLER-A" &&
+        /\bseller\s+a\b/i.test(positiveText)
+      ) {
+        score += 6;
+      }
+      if (
+        line.sellerId === "SELLER-B" &&
+        /\bseller\s+b\b/i.test(positiveText)
+      ) {
+        score += 6;
+      }
+      for (const kw of line.keywords) {
+        if (positiveText.includes(kw)) {
+          score += 2;
+        }
+      }
+      // If a correction clause explicitly says "inside is actually ...", prioritize it heavily.
+      const actualMatch = positiveText.match(/inside is actually([^|]+)/i);
+      if (actualMatch) {
+        const actualClause = actualMatch[1];
+        if (
+          actualClause.includes(line.sku.toLowerCase()) ||
+          line.keywords.some((kw) => actualClause.includes(kw))
+        ) {
+          score += 12;
+        }
+      }
+      return { line, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    if (scored[0].score > 0 && (scored.length === 1 || scored[0].score > scored[1].score)) {
+      return scored[0].line;
+    }
+    return null;
+  }
+
+  // Fallback for legacy prompts without ORDER_LINES section (e.g. snapshot baseline without lines)
   const mentionsJacket =
-    !negatedJacket &&
-    /(jacket|jkt-nvy-l|nairobi streetwear|seller a|seller-a|line-402-a)/i.test(lowerNote);
+    /(jacket|jkt-nvy-l|nairobi streetwear|seller a|seller-a|line-402-a)/i.test(positiveText);
   const mentionsBoots =
-    !negatedBoots &&
     /(boots|chelsea|footwear|bts-tan-42|rift valley|seller b|seller-b|line-402-b)/i.test(
-      lowerNote,
+      positiveText,
     );
 
-  if (mentionsJacket && !mentionsBoots) return "SELLER-A";
-  if (mentionsBoots && !mentionsJacket) return "SELLER-B";
+  if (mentionsJacket && !mentionsBoots) {
+    return {
+      lineId: "LINE-402-A",
+      sellerId: "SELLER-A",
+      sellerName: "Nairobi Streetwear Co.",
+      sku: "JKT-NVY-L",
+      itemTitle: "Navy Quilted Winter Jacket (Size L)",
+      keywords: ["jacket"],
+    };
+  }
+  if (mentionsBoots && !mentionsJacket) {
+    return {
+      lineId: "LINE-402-B",
+      sellerId: "SELLER-B",
+      sellerName: "Rift Valley Footwear",
+      sku: "BTS-TAN-42",
+      itemTitle: "Tan Leather Chelsea Boots (Size 42)",
+      keywords: ["boots"],
+    };
+  }
   return null;
 }
 
@@ -423,14 +541,9 @@ function analyzeRefundDeskPrompt(
     /DRAFT_DEBITED_SELLER:\s*(SELLER-[AB])/i,
     "SELLER-B",
   ) as SellerId;
-
-  let chosenSeller: SellerId = draftDebitedSeller;
-  const lowerTicket = ticketText.toLowerCase();
-  if (/(jacket|jkt-nvy-l|nairobi streetwear)/i.test(lowerTicket)) {
-    chosenSeller = "SELLER-A";
-  } else if (/(boots|chelsea|bts-tan-42|rift valley)/i.test(lowerTicket)) {
-    chosenSeller = "SELLER-B";
-  }
+  const orderLines = parseOrderLinesFromPrompt(firstUser);
+  const ticketMatchedLine = inferWarehouseOrderLine(ticketText, orderLines);
+  const chosenSeller: SellerId = ticketMatchedLine?.sellerId ?? draftDebitedSeller;
 
   return {
     checkoutId,
@@ -440,16 +553,6 @@ function analyzeRefundDeskPrompt(
     rationale: `Initial refund desk proposal based on ticket and draft queue: debit ${chosenSeller} KSh ${refundAmountKsh.toLocaleString("en-KE")} (epoch ${initialEpoch}).`,
   };
 }
-
-const ALL_CONTEXT_ITEM_TYPES = [
-  "user_message",
-  "system_message",
-  "developer_message",
-  "reasoning",
-  "function_call",
-  "function_call_output",
-  "model_message",
-];
 
 export function resolveInferenceMode(options?: {
   modeOverride?: "auto" | "live" | "mock";

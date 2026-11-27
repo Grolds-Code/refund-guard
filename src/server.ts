@@ -1,23 +1,27 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BLACK_FRIDAY_BATCH_CHECKOUTS } from "./finance/batch.js";
 import {
   createAmbiguousDisputeFixture,
   createUnrelatedDisputeFixture,
   getScenarioById,
   SCENARIOS,
 } from "./finance/fixtures.js";
-import type { MidFlightInjection, SellerId } from "./finance/types.js";
+import type { MidFlightInjection, ScenarioFixture, SellerId } from "./finance/types.js";
 import {
   runSingleAgentSnapshotBaseline,
   runTicketAndDraftBaseline,
 } from "./engine/baseline.js";
+import { runBlackFridayBatch } from "./engine/run-batch.js";
 import {
   buildInjectedChargeback,
   buildInjectedWarehouseCorrection,
   runRefundGuardCase,
+  type PostAcceptanceInjector,
 } from "./engine/run-case.js";
 import { resolveInferenceMode } from "./mozaik/runner.js";
 
@@ -25,10 +29,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_INDEX = join(__dirname, "..", "public", "index.html");
 const PORT = Number.parseInt(process.env.PORT ?? "3000", 10);
 
+interface ActiveSession {
+  scenario: ScenarioFixture;
+  injector: PostAcceptanceInjector;
+  injectedNotes: Array<{ noteId: string; receivedAt: string; hub: string; text: string; supersedesNoteId?: string }>;
+  injectedDispute: ReturnType<typeof buildInjectedChargeback> | null;
+}
+
+const activeSessions = new Map<string, ActiveSession>();
+
 interface RunRequestBody {
   scenarioId: string;
   customWarehouseNoteText?: string;
   overrideDraftSellerId?: SellerId;
+  slowDemo?: boolean;
   injectionMode?:
     | "scenario-default"
     | "none"
@@ -38,6 +52,17 @@ interface RunRequestBody {
     | "correction-seller-a"
     | "correction-seller-b";
   modeOverride?: "auto" | "live" | "mock";
+}
+
+interface LiveInjectBody {
+  kind: "WAREHOUSE_CORRECTION" | "CHARGEBACK_MATCHING" | "CHARGEBACK_UNRELATED";
+  targetSellerId?: SellerId;
+}
+
+function resolveAnyScenario(id: string): ScenarioFixture {
+  const fromBatch = BLACK_FRIDAY_BATCH_CHECKOUTS.find((s) => s.id === id);
+  if (fromBatch) return fromBatch;
+  return getScenarioById(id);
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -72,6 +97,7 @@ const server = createServer(async (req, res) => {
         mode: resolved.mode,
         model: resolved.modelName,
         scenarios: SCENARIOS.length,
+        batchCheckouts: BLACK_FRIDAY_BATCH_CHECKOUTS.length,
       });
       return;
     }
@@ -82,7 +108,14 @@ const server = createServer(async (req, res) => {
         mode: resolved.mode,
         model: resolved.modelName,
         scenarios: SCENARIOS,
+        batchCheckouts: BLACK_FRIDAY_BATCH_CHECKOUTS,
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/batch") {
+      const batchSummary = await runBlackFridayBatch({ latencyScale: 0.7 });
+      sendJson(res, 200, batchSummary);
       return;
     }
 
@@ -123,9 +156,48 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // Live mid-run event injection into an actively executing Mozaik session
+    const injectMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);
+    if (req.method === "POST" && injectMatch) {
+      const sessionId = injectMatch[1];
+      const session = activeSessions.get(sessionId);
+      if (!session) {
+        sendJson(res, 404, { error: "Active review session not found or already completed." });
+        return;
+      }
+      const body = await readJsonBody<LiveInjectBody>(req);
+      if (body.kind === "WAREHOUSE_CORRECTION") {
+        const note = buildInjectedWarehouseCorrection(
+          session.scenario,
+          body.targetSellerId ?? "SELLER-A",
+        );
+        session.injectedNotes.push(note);
+        session.injector.injectWarehouseCorrection(note);
+        sendJson(res, 200, { ok: true, injected: "WAREHOUSE_CORRECTION", noteId: note.noteId });
+        return;
+      }
+      if (body.kind === "CHARGEBACK_MATCHING") {
+        const cb = buildInjectedChargeback(session.scenario);
+        session.injectedDispute = cb;
+        session.injector.injectChargeback(cb);
+        sendJson(res, 200, { ok: true, injected: "CHARGEBACK_MATCHING", disputeId: cb.disputeId });
+        return;
+      }
+      if (body.kind === "CHARGEBACK_UNRELATED") {
+        const cb = createUnrelatedDisputeFixture();
+        session.injectedDispute = cb;
+        session.injector.injectChargeback(cb);
+        sendJson(res, 200, { ok: true, injected: "CHARGEBACK_UNRELATED", disputeId: cb.disputeId });
+        return;
+      }
+      sendJson(res, 400, { error: "Unsupported injection kind" });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/run") {
       const body = await readJsonBody<RunRequestBody>(req);
-      const scenario = getScenarioById(body.scenarioId ?? SCENARIOS[1].id);
+      const scenario = resolveAnyScenario(body.scenarioId ?? SCENARIOS[1].id);
+      const sessionId = randomUUID();
 
       let overrideInjection: MidFlightInjection | null | undefined = undefined;
       if (body.injectionMode === "none") {
@@ -172,7 +244,9 @@ const server = createServer(async (req, res) => {
         res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
       };
 
-      const latencyScale = body.modeOverride === "live" ? 1 : 3.2;
+      writeSse("session", { sessionId, scenarioId: scenario.id });
+
+      const latencyScale = body.modeOverride === "live" ? 1 : body.slowDemo ? 14 : 3.2;
 
       const overriddenScenario = {
         ...scenario,
@@ -200,36 +274,58 @@ const server = createServer(async (req, res) => {
             : (overrideInjection ?? undefined),
       };
 
-      const [report, snapshotBaseline] = await Promise.all([
-        runRefundGuardCase(scenario, {
-          modeOverride: body.modeOverride,
-          latencyScale,
-          customWarehouseNoteText: body.customWarehouseNoteText,
-          overrideDraftSellerId: body.overrideDraftSellerId,
-          overrideInjection,
-          onTimeline: (entry) => writeSse("timeline", entry),
-        }),
-        runSingleAgentSnapshotBaseline(overriddenScenario, {
-          modeOverride: body.modeOverride,
-          latencyScale: 0.4,
-        }),
-      ]);
+      let sessionRecord: ActiveSession | undefined;
+      try {
+        const [report, snapshotBaseline] = await Promise.all([
+          runRefundGuardCase(scenario, {
+            modeOverride: body.modeOverride,
+            latencyScale,
+            customWarehouseNoteText: body.customWarehouseNoteText,
+            overrideDraftSellerId: body.overrideDraftSellerId,
+            overrideInjection,
+            onSessionReady: (injector) => {
+              sessionRecord = {
+                scenario: overriddenScenario,
+                injector,
+                injectedNotes: [],
+                injectedDispute: null,
+              };
+              activeSessions.set(sessionId, sessionRecord);
+            },
+            onTimeline: (entry) => writeSse("timeline", entry),
+          }),
+          runSingleAgentSnapshotBaseline(overriddenScenario, {
+            modeOverride: body.modeOverride,
+            latencyScale: 0.4,
+          }),
+        ]);
 
-      writeSse("report", {
-        report,
-        baseline: snapshotBaseline,
-        sourceRecords: {
-          settlements: overriddenScenario.settlements,
-          orderLines: overriddenScenario.orderLines,
-          warehouseNotes: overriddenScenario.midFlightInjection?.warehouseNote
-            ? [
-                overriddenScenario.initialWarehouseNote,
-                overriddenScenario.midFlightInjection.warehouseNote,
-              ]
-            : [overriddenScenario.initialWarehouseNote],
-          dispute: overriddenScenario.midFlightInjection?.chargeback ?? overriddenScenario.initialChargeback ?? null,
-        },
-      });
+        const allNotes = [overriddenScenario.initialWarehouseNote];
+        if (overriddenScenario.midFlightInjection?.warehouseNote) {
+          allNotes.push(overriddenScenario.midFlightInjection.warehouseNote);
+        }
+        if (sessionRecord) {
+          allNotes.push(...sessionRecord.injectedNotes);
+        }
+
+        writeSse("report", {
+          report,
+          baseline: snapshotBaseline,
+          sourceRecords: {
+            settlements: overriddenScenario.settlements,
+            orderLines: overriddenScenario.orderLines,
+            warehouseNotes: allNotes,
+            dispute:
+              sessionRecord?.injectedDispute ??
+              overriddenScenario.midFlightInjection?.chargeback ??
+              overriddenScenario.initialChargeback ??
+              null,
+          },
+        });
+      } finally {
+        activeSessions.delete(sessionId);
+      }
+
       res.end();
       return;
     }
@@ -250,5 +346,7 @@ server.listen(PORT, () => {
   const resolved = resolveInferenceMode();
   console.log(`\nRefundGuard interactive demo running on http://localhost:${PORT}`);
   console.log(`Inference mode: ${resolved.mode} (${resolved.modelName})`);
-  console.log(`Loaded ${SCENARIOS.length} Black Friday scenarios. Press Ctrl+C to stop.\n`);
+  console.log(
+    `Loaded ${SCENARIOS.length} scenarios + ${BLACK_FRIDAY_BATCH_CHECKOUTS.length}-checkout Black Friday batch. Press Ctrl+C to stop.\n`,
+  );
 });

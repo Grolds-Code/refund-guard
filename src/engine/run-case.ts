@@ -37,6 +37,11 @@ export interface RunCaseOptions {
    * allowing deterministic tests of post-acceptance updates without fixed delays.
    */
   onProposalAccepted?: (injector: PostAcceptanceInjector) => void;
+  /**
+   * Invoked once the Mozaik runtime is joined and ready, returning live injector
+   * callbacks that can interrupt the running agents in real time (used by UI live interrupt).
+   */
+  onSessionReady?: (injector: PostAcceptanceInjector) => void;
 }
 
 /**
@@ -113,15 +118,19 @@ export async function runRefundGuardCase(
     );
   };
 
+  const liveInjector: PostAcceptanceInjector = {
+    injectWarehouseCorrection: publishWarehouseCorrection,
+    injectChargeback: publishChargeback,
+  };
+
+  options.onSessionReady?.(liveInjector);
+
   if (options.onProposalAccepted) {
     let fired = false;
     state.onTimeline((entry) => {
       if (!fired && entry.type === "proposal.accepted") {
         fired = true;
-        options.onProposalAccepted?.({
-          injectWarehouseCorrection: publishWarehouseCorrection,
-          injectChargeback: publishChargeback,
-        });
+        options.onProposalAccepted?.(liveInjector);
       }
     });
   }

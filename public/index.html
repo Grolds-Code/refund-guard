@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RefundGuard | Concurrent Payout &amp; Refund Interception</title>
-  <meta name="description" content="Concurrent Mozaik AI agents with mid-flight interception preventing Black Friday double-payouts and zero-sum seller misallocations." />
+  <meta name="description" content="Concurrent Mozaik AI agents with mid-flight interception preventing Black Friday wrong-seller misallocations and unsafe cross-system refund proposals." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -16,7 +16,7 @@
       --surface-3: #222226;
       --border: rgba(255, 255, 255, 0.08);
       --border-hover: rgba(255, 255, 255, 0.16);
-      --border-strong: rgba(255, 255, 255, 0.22);
+      --border-strong: rgba(255, 255, 255, 0.24);
 
       --ink: #fafafa;
       --ink-2: #a1a1aa;
@@ -49,10 +49,8 @@
       font-size: 13.5px;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
     }
 
-    /* Subtle top radial ambient light (monochrome, ultra-restrained) */
     body::before {
       content: "";
       position: fixed;
@@ -63,12 +61,11 @@
       z-index: 0;
     }
 
-    /* Sticky Top Navigation */
     header {
       position: sticky;
       top: 0;
       z-index: 20;
-      background: rgba(9, 9, 11, 0.82);
+      background: rgba(9, 9, 11, 0.84);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       border-bottom: 1px solid var(--border);
@@ -80,7 +77,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 16px;
+      gap: 14px;
       flex-wrap: wrap;
     }
     .brand {
@@ -99,12 +96,6 @@
       font-family: var(--mono);
       font-size: 11px;
       font-weight: 700;
-      letter-spacing: -0.04em;
-    }
-    .brand-text {
-      display: flex;
-      align-items: baseline;
-      gap: 10px;
     }
     .brand h1 {
       margin: 0;
@@ -112,9 +103,29 @@
       font-weight: 600;
       letter-spacing: -0.02em;
     }
-    .brand .tagline {
-      font-size: 12.5px;
-      color: var(--ink-3);
+    .view-switch {
+      display: inline-flex;
+      gap: 3px;
+      padding: 3px;
+      border-radius: 8px;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+    }
+    .view-btn {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ink-2);
+      padding: 5px 11px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .view-btn:hover { color: var(--ink); }
+    .view-btn.active {
+      background: var(--surface-3);
+      color: var(--ink);
+      border-color: var(--border-hover);
     }
     .header-right {
       display: flex;
@@ -147,13 +158,12 @@
     .dot.danger { background: var(--rose); }
     .dot.sky { background: var(--sky); }
 
-    /* Container */
     .shell {
       position: relative;
       z-index: 1;
       max-width: 1360px;
       margin: 0 auto;
-      padding: 20px 24px 40px;
+      padding: 20px 24px 44px;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -162,8 +172,8 @@
       .shell { padding: 14px 14px 32px; }
       .header-inner { padding: 10px 14px; }
     }
+    .hidden { display: none !important; }
 
-    /* Scenario Segmented Strip */
     .scenario-strip {
       display: flex;
       align-items: center;
@@ -195,15 +205,11 @@
       white-space: nowrap;
       transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
     }
-    .tab-btn:hover {
-      color: var(--ink);
-      background: rgba(255, 255, 255, 0.04);
-    }
+    .tab-btn:hover { color: var(--ink); background: rgba(255, 255, 255, 0.04); }
     .tab-btn.active {
       background: var(--surface-3);
       color: var(--ink);
       border-color: var(--border-hover);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
     }
     .tab-num {
       font-family: var(--mono);
@@ -211,24 +217,21 @@
       color: var(--ink-3);
       margin-right: 5px;
     }
-    .tab-btn.active .tab-num { color: var(--ink-2); }
 
-    /* Buttons */
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 7px;
+      gap: 6px;
       padding: 7px 13px;
       border-radius: var(--radius-sm);
       font-family: var(--sans);
       font-size: 12.5px;
       font-weight: 500;
       cursor: pointer;
-      transition: background 0.14s ease, border-color 0.14s ease, opacity 0.14s ease, transform 0.08s ease;
+      transition: background 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
     }
-    .btn:active:not(:disabled) { transform: translateY(0.5px); }
-    .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+    .btn:disabled { opacity: 0.38; cursor: not-allowed; }
     .btn-primary {
       background: var(--ink);
       color: var(--bg);
@@ -246,15 +249,48 @@
       background: var(--surface-2);
       border-color: var(--border-hover);
     }
+    .btn-interrupt {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border: 1px solid rgba(251, 191, 36, 0.28);
+      font-size: 11.5px;
+      padding: 6px 10px;
+    }
+    .btn-interrupt:hover:not(:disabled) {
+      background: rgba(245, 158, 11, 0.2);
+    }
+    .btn-sm {
+      padding: 4px 9px;
+      font-size: 11.5px;
+    }
+    .btn-sm.selected-ok {
+      background: var(--emerald-soft);
+      color: var(--emerald);
+      border-color: rgba(52, 211, 153, 0.35);
+    }
+    .btn-sm.selected-warn {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border-color: rgba(251, 191, 36, 0.35);
+    }
+    .btn-sm.selected-danger {
+      background: var(--rose-soft);
+      color: var(--rose);
+      border-color: rgba(251, 113, 133, 0.35);
+    }
 
-    /* KPI Strip */
     .kpi-grid {
       display: grid;
       grid-template-columns: 1.55fr 1fr 1fr;
       gap: 12px;
     }
+    .kpi-grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
     @media (max-width: 960px) {
-      .kpi-grid { grid-template-columns: 1fr; }
+      .kpi-grid, .kpi-grid-4 { grid-template-columns: 1fr; }
     }
     .surface {
       background: var(--surface-1);
@@ -283,20 +319,14 @@
       color: var(--ink-3);
     }
     .kpi-val {
-      font-size: 18px;
+      font-size: 17.5px;
       font-weight: 600;
       letter-spacing: -0.025em;
-      display: flex;
-      align-items: center;
-      gap: 9px;
       font-variant-numeric: tabular-nums;
     }
-    .kpi-val.mono { font-family: var(--mono); font-size: 16.5px; }
-    .kpi-sub {
-      font-size: 12px;
-      color: var(--ink-2);
-      line-height: 1.4;
-    }
+    .kpi-val.mono { font-family: var(--mono); font-size: 16px; }
+    .kpi-sub { font-size: 12px; color: var(--ink-2); line-height: 1.4; }
+
     .status-tag {
       display: inline-flex;
       align-items: center;
@@ -314,10 +344,7 @@
     .status-tag.danger { background: var(--rose-soft); color: var(--rose); }
     .status-tag.sky { background: var(--sky-soft); color: var(--sky); }
 
-    /* Concurrency Gantt Strip */
-    .gantt-card {
-      padding: 15px 18px;
-    }
+    .gantt-card { padding: 15px 18px; }
     .gantt-head {
       display: flex;
       align-items: center;
@@ -333,28 +360,25 @@
       font-size: 11.5px;
       color: var(--ink-3);
       font-family: var(--mono);
+      flex-wrap: wrap;
     }
-    .gantt-rows {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
+    .gantt-rows { display: flex; flex-direction: column; gap: 8px; }
     .gantt-row {
       display: grid;
-      grid-template-columns: 185px 1fr 74px;
+      grid-template-columns: 180px 1fr 72px;
       align-items: center;
       gap: 12px;
     }
     @media (max-width: 680px) {
-      .gantt-row { grid-template-columns: 120px 1fr 56px; }
+      .gantt-row { grid-template-columns: 115px 1fr 56px; }
     }
     .gantt-label {
       font-family: var(--mono);
       font-size: 11.5px;
       color: var(--ink-2);
-      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .gantt-track {
       position: relative;
@@ -372,13 +396,7 @@
     }
     .gantt-bar.refund { background: rgba(250, 250, 250, 0.78); }
     .gantt-bar.sentinel { background: rgba(56, 189, 248, 0.72); }
-    .gantt-marker {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      z-index: 2;
-    }
+    .gantt-marker { position: absolute; top: 0; bottom: 0; width: 2px; z-index: 2; }
     .gantt-marker.inject { background: var(--amber); }
     .gantt-marker.gate { background: var(--rose); }
     .gantt-time {
@@ -389,10 +407,9 @@
       font-variant-numeric: tabular-nums;
     }
 
-    /* Main Split Workspace */
     .workspace-grid {
       display: grid;
-      grid-template-columns: 350px minmax(0, 1fr);
+      grid-template-columns: 356px minmax(0, 1fr);
       gap: 16px;
       align-items: start;
     }
@@ -407,26 +424,17 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
+      flex-wrap: wrap;
     }
-    .card-title {
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-      color: var(--ink);
-      margin: 0;
-    }
-    .card-body {
-      padding: 16px 18px;
-    }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--ink); margin: 0; }
+    .card-body { padding: 16px 18px; }
 
-    /* Controls Panel */
     .case-brief {
       font-size: 12.5px;
       color: var(--ink-2);
       padding-bottom: 14px;
       margin-bottom: 14px;
       border-bottom: 1px solid var(--border);
-      line-height: 1.5;
     }
     .field { margin-bottom: 14px; }
     .field:last-of-type { margin-bottom: 0; }
@@ -450,18 +458,13 @@
       border: none;
       background: transparent;
       color: var(--ink-2);
-      padding: 7px 8px;
+      padding: 7px 6px;
       border-radius: 5px;
       font-family: var(--mono);
-      font-size: 11.5px;
+      font-size: 11px;
       cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
     }
-    .seg-btn:hover { color: var(--ink); }
-    .seg-btn.active {
-      background: var(--surface-3);
-      color: var(--ink);
-    }
+    .seg-btn.active { background: var(--surface-3); color: var(--ink); }
     select, textarea {
       width: 100%;
       background: var(--bg);
@@ -471,25 +474,16 @@
       padding: 8px 10px;
       font-family: var(--sans);
       font-size: 12.5px;
-      transition: border-color 0.14s ease;
     }
     textarea {
       font-family: var(--mono);
       font-size: 11.5px;
-      line-height: 1.55;
-      min-height: 92px;
+      line-height: 1.5;
+      min-height: 86px;
       resize: vertical;
     }
-    select:focus, textarea:focus {
-      outline: none;
-      border-color: var(--border-strong);
-    }
-    .preset-row {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-top: 7px;
-    }
+    select:focus, textarea:focus { outline: none; border-color: var(--border-strong); }
+    .preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
     .preset-btn {
       background: var(--surface-2);
       border: 1px solid var(--border);
@@ -498,33 +492,36 @@
       font-size: 11px;
       color: var(--ink-2);
       cursor: pointer;
-      transition: border-color 0.12s ease, color 0.12s ease;
     }
-    .preset-btn:hover {
-      border-color: var(--border-hover);
-      color: var(--ink);
+    .preset-btn:hover { border-color: var(--border-hover); color: var(--ink); }
+
+    .live-interrupt-box {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: var(--radius-md);
+      background: var(--bg);
+      border: 1px solid var(--border);
     }
-    .control-actions {
+    .checkbox-row {
       display: flex;
+      align-items: center;
       gap: 8px;
-      margin-top: 16px;
+      font-size: 12px;
+      color: var(--ink-2);
+      margin-bottom: 10px;
+      cursor: pointer;
     }
+    .interrupt-btns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .control-actions { display: flex; gap: 8px; margin-top: 14px; }
     .control-actions .btn-primary { flex: 1; }
 
-    /* Right Stack */
-    .right-stack {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      min-width: 0;
-    }
+    .right-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
-    /* Tables */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-variant-numeric: tabular-nums;
-    }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
     th {
       font-size: 11px;
       font-weight: 500;
@@ -545,22 +542,14 @@
       text-align: right;
       color: var(--ink);
     }
-    td:first-child {
-      font-family: var(--sans);
-      font-size: 13px;
-    }
+    td:first-child { font-family: var(--sans); font-size: 13px; }
     tbody tr:last-child td { border-bottom: none; }
     tr.total-row td {
       font-weight: 600;
       padding-top: 13px;
       border-top: 1px solid var(--border-hover);
     }
-    .seller-sub {
-      display: block;
-      font-size: 11.5px;
-      color: var(--ink-3);
-      font-weight: 400;
-    }
+    .seller-sub { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 400; }
     .delta-neg { color: var(--rose); }
     .delta-pos { color: var(--emerald); }
     .delta-zero { color: var(--ink-3); }
@@ -575,12 +564,7 @@
       padding-top: 12px;
       border-top: 1px solid var(--border);
     }
-    .cite-group {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 5px;
-    }
+    .cite-group { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
     .cite {
       font-family: var(--mono);
       font-size: 10.5px;
@@ -605,8 +589,65 @@
       padding: 2px 6px;
       border-radius: 4px;
     }
+    .operator-bar {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
 
-    /* Interception Gate & Agent Event Stream */
+    /* Formatted Source Record Cards */
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    @media (max-width: 780px) {
+      .source-grid { grid-template-columns: 1fr; }
+    }
+    .source-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 11px 13px;
+    }
+    .source-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .source-id {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .source-kind {
+      font-family: var(--mono);
+      font-size: 10px;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      letter-spacing: 0.05em;
+    }
+    .source-body {
+      font-size: 12px;
+      color: var(--ink-2);
+      line-height: 1.48;
+    }
+    .source-meta {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--ink-3);
+    }
+
     .split-bottom {
       display: grid;
       grid-template-columns: 1fr 1.15fr;
@@ -615,7 +656,6 @@
     @media (max-width: 900px) {
       .split-bottom { grid-template-columns: 1fr; }
     }
-
     .gate-item {
       padding: 12px 14px;
       border-radius: var(--radius-md);
@@ -632,23 +672,10 @@
       margin-bottom: 6px;
       flex-wrap: wrap;
     }
-    .gate-desc {
-      font-size: 12.5px;
-      color: var(--ink-2);
-      line-height: 1.48;
-    }
-    .gate-foot {
-      margin-top: 8px;
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink-3);
-    }
+    .gate-desc { font-size: 12.5px; color: var(--ink-2); line-height: 1.48; }
+    .gate-foot { margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 
-    /* Event Feed */
-    .filter-pills {
-      display: flex;
-      gap: 4px;
-    }
+    .filter-pills { display: flex; gap: 4px; }
     .filter-pill {
       border: 1px solid transparent;
       background: transparent;
@@ -658,7 +685,6 @@
       font-size: 11.5px;
       cursor: pointer;
     }
-    .filter-pill:hover { color: var(--ink-2); }
     .filter-pill.active {
       background: var(--surface-2);
       border-color: var(--border);
@@ -670,7 +696,6 @@
       gap: 6px;
       max-height: 290px;
       overflow-y: auto;
-      padding-right: 2px;
     }
     .feed-row {
       display: grid;
@@ -680,19 +705,8 @@
       border-radius: var(--radius-sm);
       background: var(--bg);
       border: 1px solid var(--border);
-      animation: fadeIn 0.16s ease;
     }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(3px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .feed-ts {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink-3);
-      font-variant-numeric: tabular-nums;
-      padding-top: 1px;
-    }
+    .feed-ts { font-family: var(--mono); font-size: 11px; color: var(--ink-3); padding-top: 1px; }
     .feed-actor {
       display: flex;
       align-items: center;
@@ -702,18 +716,9 @@
       color: var(--ink);
       margin-bottom: 2px;
     }
-    .feed-epoch {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--ink-3);
-    }
-    .feed-msg {
-      font-size: 12px;
-      color: var(--ink-2);
-      word-break: break-word;
-    }
+    .feed-epoch { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+    .feed-msg { font-size: 12px; color: var(--ink-2); word-break: break-word; }
 
-    /* Benchmark Drawer */
     .benchmark-card { display: none; }
     .benchmark-card.visible { display: block; }
   </style>
@@ -723,9 +728,10 @@
     <div class="header-inner">
       <div class="brand">
         <div class="logo-mark">RG</div>
-        <div class="brand-text">
-          <h1>RefundGuard</h1>
-          <span class="tagline">Concurrent payout &amp; refund interception</span>
+        <h1>RefundGuard</h1>
+        <div class="view-switch" role="tablist">
+          <button type="button" class="view-btn active" data-view="inspector">Checkout Inspector</button>
+          <button type="button" class="view-btn" data-view="batch">Black Friday Batch Desk (4 Checkouts)</button>
         </div>
       </div>
       <div class="header-right">
@@ -736,8 +742,8 @@
     </div>
   </header>
 
-  <div class="shell">
-    <!-- Scenario Selector Bar -->
+  <!-- VIEW 1: SINGLE CHECKOUT INSPECTOR -->
+  <div id="inspectorView" class="shell">
     <div class="scenario-strip">
       <div id="scenarioTabs" class="tabs" role="tablist"></div>
       <div style="display:flex; gap:8px;">
@@ -746,15 +752,14 @@
       </div>
     </div>
 
-    <!-- Top KPI Row -->
     <div class="kpi-grid">
       <div class="surface kpi">
         <div class="kpi-top">
           <span class="eyebrow">Decision Status</span>
           <span id="verdictTag" class="status-tag">IDLE</span>
         </div>
-        <div id="verdictHeadline" class="kpi-val">Ready to inspect CHK-402</div>
-        <div id="verdictSub" class="kpi-sub">Choose a scenario or edit case inputs to run concurrent Mozaik verification.</div>
+        <div id="verdictHeadline" class="kpi-val">Ready to inspect checkout</div>
+        <div id="verdictSub" class="kpi-sub">Choose a scenario or edit inputs to run concurrent Mozaik verification.</div>
       </div>
 
       <div class="surface kpi">
@@ -763,7 +768,7 @@
           <span id="epochTag" class="status-tag">epoch 1</span>
         </div>
         <div id="protectionVal" class="kpi-val mono">KSh 0</div>
-        <div id="protectionSub" class="kpi-sub">Deterministic integer KSh calculation from immutable source records.</div>
+        <div id="protectionSub" class="kpi-sub">Deterministic integer KSh math from immutable source records.</div>
       </div>
 
       <div class="surface kpi">
@@ -772,11 +777,10 @@
           <span id="overlapTag" class="status-tag">pending</span>
         </div>
         <div id="overlapVal" class="kpi-val mono">0ms overlap</div>
-        <div id="overlapSub" class="kpi-sub">Measures real execution overlap between RefundDesk and Sentinel loops.</div>
+        <div id="overlapSub" class="kpi-sub">Measures actual overlap between RefundDesk and Sentinel loops.</div>
       </div>
     </div>
 
-    <!-- Visual Concurrency Execution Timeline -->
     <div class="surface gantt-card">
       <div class="gantt-head">
         <span class="eyebrow">Concurrent Execution Timeline (Shared RuntimeState)</span>
@@ -801,9 +805,7 @@
       </div>
     </div>
 
-    <!-- Main Workspace Split -->
     <div class="workspace-grid">
-      <!-- Left: Judge Case Controls -->
       <aside class="surface">
         <div class="card-head">
           <h2 class="card-title">Case Sandbox</h2>
@@ -815,8 +817,8 @@
           <div class="field">
             <label>Draft debited seller</label>
             <div class="seg-control">
-              <button type="button" class="seg-btn" data-seller="SELLER-A">SELLER-A (50k/40k)</button>
-              <button type="button" class="seg-btn" data-seller="SELLER-B">SELLER-B (60k/30k)</button>
+              <button type="button" class="seg-btn" data-seller="SELLER-A">SELLER-A</button>
+              <button type="button" class="seg-btn" data-seller="SELLER-B">SELLER-B</button>
             </div>
           </div>
 
@@ -831,7 +833,7 @@
           </div>
 
           <div class="field">
-            <label for="injectionMode">Mid-flight async event</label>
+            <label for="injectionMode">Scheduled mid-flight event</label>
             <select id="injectionMode">
               <option value="scenario-default">Use scenario default</option>
               <option value="none">None</option>
@@ -843,15 +845,24 @@
             </select>
           </div>
 
+          <div class="live-interrupt-box">
+            <label class="checkbox-row" style="margin-bottom:8px;">
+              <input id="slowDemoToggle" type="checkbox" />
+              <span>Live Interrupt Window (~2.4s to click mid-run)</span>
+            </label>
+            <div class="interrupt-btns">
+              <button id="liveCorrBtn" type="button" class="btn btn-interrupt" disabled>Interrupt: QC -> A</button>
+              <button id="liveDisputeBtn" type="button" class="btn btn-interrupt" disabled>Interrupt: Dispute</button>
+            </div>
+          </div>
+
           <div class="control-actions">
             <button id="runBtn" class="btn btn-primary">Run Concurrent Review</button>
           </div>
         </div>
       </aside>
 
-      <!-- Right: Ledger + Gate + Live Feed -->
       <div class="right-stack">
-        <!-- Grounded Ledger -->
         <section class="surface">
           <div class="card-head">
             <h2 class="card-title">Grounded Payout Allocation</h2>
@@ -882,16 +893,25 @@
               <div id="baselineBadge" class="baseline-pill"></div>
             </div>
             <div id="holdPolicyLine" style="margin-top:10px; font-size:12px; color:var(--ink-2);"></div>
-            <details style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px;">
-              <summary style="cursor:pointer; font-size:12px; color:var(--ink-2); font-weight:500;">
-                Inspect Source Records (Warehouse Notes &amp; Settlement Records)
+
+            <div class="operator-bar">
+              <span id="operatorStatus" class="status-tag">Operator decision: pending</span>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="APPROVED_FOR_RELEASE">Approve Release</button>
+                <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="HELD_IN_RESERVE">Hold Reserve</button>
+                <button type="button" class="btn btn-ghost btn-sm op-btn" data-op="REJECTED">Reject Draft</button>
+              </div>
+            </div>
+
+            <details open style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px;">
+              <summary style="cursor:pointer; font-size:12px; color:var(--ink); font-weight:500;">
+                Source Evidence Records (Settlements, Order Lines, Warehouse Notes &amp; Disputes)
               </summary>
-              <pre id="sourceRecordsPre" style="margin:10px 0 0; padding:10px; border-radius:6px; background:var(--bg); border:1px solid var(--border); font-family:var(--mono); font-size:11px; color:var(--ink-2); overflow-x:auto; white-space:pre-wrap;"></pre>
+              <div id="sourceCards" class="source-grid"></div>
             </details>
           </div>
         </section>
 
-        <!-- Interception Gate + Live Event Stream -->
         <div class="split-bottom">
           <section class="surface">
             <div class="card-head">
@@ -919,7 +939,6 @@
           </section>
         </div>
 
-        <!-- 5-Case Benchmark Card -->
         <section id="benchmarkCard" class="surface benchmark-card">
           <div class="card-head">
             <h2 class="card-title">5-Case Benchmark: Ticket+Draft vs. 1-Agent Snapshot (Same t=0) vs. RefundGuard</h2>
@@ -944,18 +963,87 @@
     </div>
   </div>
 
+  <!-- VIEW 2: BLACK FRIDAY 4-CHECKOUT BATCH DESK -->
+  <div id="batchView" class="shell hidden">
+    <div class="scenario-strip">
+      <div>
+        <div style="font-size:15px; font-weight:600;">Black Friday Settlement Batch: BATCH-BF-2026-01</div>
+        <div style="font-size:12.5px; color:var(--ink-2);">4 distinct multi-seller checkouts (8 Kenyan sellers) audited concurrently by 8 Mozaik agent loops.</div>
+      </div>
+      <button id="runBatchBtn" class="btn btn-primary">Run 4-Checkout Batch Audit</button>
+    </div>
+
+    <div class="kpi-grid-4">
+      <div class="surface kpi">
+        <span class="eyebrow">Concurrent Agent Loops</span>
+        <div id="batchLoopsVal" class="kpi-val mono">8 loops / 4 checkouts</div>
+        <div id="batchOverlapSub" class="kpi-sub">Click Run to verify concurrent overlap across all checkouts.</div>
+      </div>
+      <div class="surface kpi">
+        <span class="eyebrow">Operator Approved Release</span>
+        <div id="batchApprovedVal" class="kpi-val mono">KSh 0</div>
+        <div id="batchApprovedSub" class="kpi-sub">Updates live as you approve or hold exceptions below.</div>
+      </div>
+      <div class="surface kpi">
+        <span class="eyebrow">Held in Reserve / Blocked</span>
+        <div id="batchHeldVal" class="kpi-val mono">KSh 0</div>
+        <div id="batchHeldSub" class="kpi-sub">Withheld until missing receipts or active disputes resolve.</div>
+      </div>
+      <div class="surface kpi">
+        <span class="eyebrow">Misallocations Corrected</span>
+        <div id="batchCorrectedVal" class="kpi-val mono">KSh 0</div>
+        <div id="batchCorrectedSub" class="kpi-sub">Wrong-seller deductions reallocated before disbursement.</div>
+      </div>
+    </div>
+
+    <section class="surface">
+      <div class="card-head">
+        <h2 class="card-title">Checkout Release Queue &amp; Operator Sign-Off</h2>
+        <span id="batchStatusTag" class="status-tag">idle</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <thead>
+            <tr>
+              <th>Checkout &amp; Sellers</th>
+              <th>Verdict</th>
+              <th>Supported Release</th>
+              <th>Reserve Held</th>
+              <th>Operator Decision</th>
+              <th>Inspect</th>
+            </tr>
+          </thead>
+          <tbody id="batchBody">
+            <tr>
+              <td colspan="6" style="text-align:center; color:var(--ink-3); font-family:var(--sans);">
+                Click "Run 4-Checkout Batch Audit" to run all 4 checkouts concurrently.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
   <script>
     const state = {
+      view: "inspector",
       scenarios: [],
+      batchCheckouts: [],
       selectedId: null,
       draftSellerId: "SELLER-B",
       filter: "all",
       events: [],
+      activeSessionId: null,
       lastBundle: null,
+      batchSummary: null,
+      batchDecisions: {},
     };
 
     const els = {
       modeChip: document.getElementById("modeChip"),
+      inspectorView: document.getElementById("inspectorView"),
+      batchView: document.getElementById("batchView"),
       scenarioTabs: document.getElementById("scenarioTabs"),
       compareBtn: document.getElementById("compareBtn"),
       topRunBtn: document.getElementById("topRunBtn"),
@@ -965,6 +1053,9 @@
       checkoutTag: document.getElementById("checkoutTag"),
       warehouseNote: document.getElementById("warehouseNote"),
       injectionMode: document.getElementById("injectionMode"),
+      slowDemoToggle: document.getElementById("slowDemoToggle"),
+      liveCorrBtn: document.getElementById("liveCorrBtn"),
+      liveDisputeBtn: document.getElementById("liveDisputeBtn"),
       verdictTag: document.getElementById("verdictTag"),
       verdictHeadline: document.getElementById("verdictHeadline"),
       verdictSub: document.getElementById("verdictSub"),
@@ -981,11 +1072,21 @@
       ledgerBody: document.getElementById("ledgerBody"),
       citationsRow: document.getElementById("citationsRow"),
       baselineBadge: document.getElementById("baselineBadge"),
+      holdPolicyLine: document.getElementById("holdPolicyLine"),
+      operatorStatus: document.getElementById("operatorStatus"),
+      sourceCards: document.getElementById("sourceCards"),
       gateBox: document.getElementById("gateBox"),
       eventFeed: document.getElementById("eventFeed"),
       benchmarkCard: document.getElementById("benchmarkCard"),
       benchmarkBody: document.getElementById("benchmarkBody"),
-      benchmarkSummary: document.getElementById("benchmarkSummary"),
+      runBatchBtn: document.getElementById("runBatchBtn"),
+      batchLoopsVal: document.getElementById("batchLoopsVal"),
+      batchOverlapSub: document.getElementById("batchOverlapSub"),
+      batchApprovedVal: document.getElementById("batchApprovedVal"),
+      batchHeldVal: document.getElementById("batchHeldVal"),
+      batchCorrectedVal: document.getElementById("batchCorrectedVal"),
+      batchStatusTag: document.getElementById("batchStatusTag"),
+      batchBody: document.getElementById("batchBody"),
     };
 
     function fmtKsh(n) {
@@ -1000,6 +1101,18 @@
         .replace(/>/g, "&gt;");
     }
 
+    function switchView(view) {
+      state.view = view;
+      els.inspectorView.classList.toggle("hidden", view !== "inspector");
+      els.batchView.classList.toggle("hidden", view !== "batch");
+      for (const btn of document.querySelectorAll(".view-btn")) {
+        btn.classList.toggle("active", btn.dataset.view === view);
+      }
+      if (view === "batch" && !state.batchSummary) {
+        runBatchAudit();
+      }
+    }
+
     function setDraftSeller(sellerId) {
       state.draftSellerId = sellerId;
       for (const btn of document.querySelectorAll(".seg-btn")) {
@@ -1007,8 +1120,15 @@
       }
     }
 
+    function findAnyScenario(id) {
+      return (
+        state.scenarios.find((x) => x.id === id) ||
+        state.batchCheckouts.find((x) => x.id === id)
+      );
+    }
+
     function selectScenario(id) {
-      const s = state.scenarios.find((x) => x.id === id);
+      const s = findAnyScenario(id);
       if (!s) return;
       state.selectedId = id;
       for (const btn of els.scenarioTabs.querySelectorAll(".tab-btn")) {
@@ -1036,7 +1156,7 @@
     function dotClassFor(entry) {
       if (entry.type === "interception.blocked") return "danger";
       if (entry.type === "interception.cleared" || entry.type === "proposal.accepted") return "ok";
-      if (entry.type.startsWith("evidence.")) return "warn";
+      if (entry.type.startsWith("evidence.") || entry.type === "readiness.invalidated") return "warn";
       if (entry.actor === "DisputeFulfillmentSentinel") return "sky";
       return "";
     }
@@ -1083,7 +1203,7 @@
 
       const markersHtml = [
         ...injectEvents.map(
-          (e) => `<div class="gantt-marker inject" style="left:${pct(e.elapsedMs)}%" title="Mid-flight event at +${e.elapsedMs}ms"></div>`,
+          (e) => `<div class="gantt-marker inject" style="left:${pct(e.elapsedMs)}%" title="Event at +${e.elapsedMs}ms"></div>`,
         ),
         ...gateEvents.map(
           (e) => `<div class="gantt-marker gate" style="left:${pct(e.elapsedMs)}%" title="Interception at +${e.elapsedMs}ms"></div>`,
@@ -1100,6 +1220,91 @@
       `;
       els.timeRefund.textContent = `${rEnd - rStart}ms`;
       els.timeSentinel.textContent = `${sEnd - sStart}ms`;
+    }
+
+    function renderSourceCards(sourceRecords) {
+      if (!sourceRecords) return;
+      const cards = [];
+
+      for (const note of sourceRecords.warehouseNotes || []) {
+        cards.push(`
+          <div class="source-card">
+            <div class="source-card-head">
+              <span class="source-id">${escapeHtml(note.noteId)}</span>
+              <span class="source-kind">Warehouse Intake</span>
+            </div>
+            <div class="source-body">${escapeHtml(note.text)}</div>
+            <div class="source-meta">${escapeHtml(note.hub)}${note.supersedesNoteId ? ` | supersedes ${escapeHtml(note.supersedesNoteId)}` : ""}</div>
+          </div>
+        `);
+      }
+
+      for (const st of sourceRecords.settlements || []) {
+        cards.push(`
+          <div class="source-card">
+            <div class="source-card-head">
+              <span class="source-id">${escapeHtml(st.settlementId)}</span>
+              <span class="source-kind">Settlement (${escapeHtml(st.kind)})</span>
+            </div>
+            <div class="source-body">Amount: <strong>${fmtKsh(st.amountKsh)}</strong> on checkout ${escapeHtml(st.checkoutId)}</div>
+            <div class="source-meta">Card ending ${escapeHtml(st.cardLast4)} | Posted ${escapeHtml(st.postedAt)}</div>
+          </div>
+        `);
+      }
+
+      for (const line of sourceRecords.orderLines || []) {
+        cards.push(`
+          <div class="source-card">
+            <div class="source-card-head">
+              <span class="source-id">${escapeHtml(line.lineId)}</span>
+              <span class="source-kind">${escapeHtml(line.sellerId)}</span>
+            </div>
+            <div class="source-body">${escapeHtml(line.itemTitle)} (<strong>${fmtKsh(line.amountKsh)}</strong>)</div>
+            <div class="source-meta">SKU ${escapeHtml(line.sku)} | Checkout ${escapeHtml(line.checkoutId)}</div>
+          </div>
+        `);
+      }
+
+      if (sourceRecords.dispute) {
+        const d = sourceRecords.dispute;
+        cards.push(`
+          <div class="source-card">
+            <div class="source-card-head">
+              <span class="source-id">${escapeHtml(d.disputeId)}</span>
+              <span class="source-kind">PSP Dispute (${escapeHtml(d.status)})</span>
+            </div>
+            <div class="source-body">${escapeHtml(d.narrative)}</div>
+            <div class="source-meta">${escapeHtml(d.reasonCode)} | Card ${escapeHtml(d.cardLast4)} | Suffix ${escapeHtml(d.pspReferenceSuffix)} | ${fmtKsh(d.amountKsh)}</div>
+          </div>
+        `);
+      }
+
+      els.sourceCards.innerHTML = cards.join("");
+    }
+
+    function setOperatorDecision(decision) {
+      const cls =
+        decision === "APPROVED_FOR_RELEASE"
+          ? "ok"
+          : decision === "HELD_IN_RESERVE"
+            ? "warn"
+            : decision === "REJECTED"
+              ? "danger"
+              : "";
+      els.operatorStatus.className = `status-tag ${cls}`;
+      els.operatorStatus.textContent = `Operator decision: ${decision.replace(/_/g, " ").toLowerCase()}`;
+      for (const btn of document.querySelectorAll(".op-btn")) {
+        btn.classList.remove("selected-ok", "selected-warn", "selected-danger");
+        if (btn.dataset.op === decision) {
+          btn.classList.add(
+            decision === "APPROVED_FOR_RELEASE"
+              ? "selected-ok"
+              : decision === "HELD_IN_RESERVE"
+                ? "selected-warn"
+                : "selected-danger",
+          );
+        }
+      }
     }
 
     function renderReport(payload) {
@@ -1156,6 +1361,11 @@
       els.overlapSub.textContent = `${report.interceptions.length} pre-execution interception${report.interceptions.length === 1 ? "" : "s"} fired.`;
 
       renderGantt(report);
+      renderSourceCards(sourceRecords);
+
+      setOperatorDecision(
+        report.verdict === "READY_FOR_HUMAN_APPROVAL" ? "APPROVED_FOR_RELEASE" : "PENDING",
+      );
 
       const rowsHtml = report.ledger.lines
         .map((line) => {
@@ -1200,16 +1410,7 @@
       els.citationsRow.innerHTML = report.ledger.allCitations
         .map((c) => `<span class="cite">${escapeHtml(c)}</span>`)
         .join("");
-
-      const holdLineEl = document.getElementById("holdPolicyLine");
-      if (holdLineEl) {
-        holdLineEl.textContent = report.ledger.holdPolicyExplanation;
-      }
-
-      const sourcePre = document.getElementById("sourceRecordsPre");
-      if (sourcePre && sourceRecords) {
-        sourcePre.textContent = JSON.stringify(sourceRecords, null, 2);
-      }
+      els.holdPolicyLine.textContent = report.ledger.holdPolicyExplanation;
 
       const baseSeller = baseline.acceptedProposal?.debitSellerId ?? baseline.verdict;
       const guardSeller = report.acceptedProposal?.debitSellerId ?? report.verdict;
@@ -1250,9 +1451,25 @@
       }
     }
 
+    function setLiveInterruptButtons(enabled) {
+      els.liveCorrBtn.disabled = !enabled;
+      els.liveDisputeBtn.disabled = !enabled;
+    }
+
+    async function sendLiveInterrupt(kind, targetSellerId) {
+      if (!state.activeSessionId) return;
+      setLiveInterruptButtons(false);
+      await fetch(`/api/sessions/${state.activeSessionId}/inject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, targetSellerId }),
+      });
+    }
+
     async function runSelected() {
       els.runBtn.disabled = true;
       els.topRunBtn.disabled = true;
+      state.activeSessionId = null;
       state.events = [];
       renderFeed();
       els.gateBox.innerHTML = `<div class="gate-desc">Inspecting concurrent agent loops...</div>`;
@@ -1270,6 +1487,7 @@
             overrideDraftSellerId: state.draftSellerId,
             customWarehouseNoteText: els.warehouseNote.value,
             injectionMode: els.injectionMode.value,
+            slowDemo: els.slowDemoToggle.checked,
           }),
         });
 
@@ -1293,10 +1511,15 @@
             }
             if (!dataStr) continue;
             const parsed = JSON.parse(dataStr);
-            if (eventType === "timeline") {
+            if (eventType === "session") {
+              state.activeSessionId = parsed.sessionId;
+              setLiveInterruptButtons(true);
+            } else if (eventType === "timeline") {
               state.events.push(parsed);
               renderFeed();
             } else if (eventType === "report") {
+              setLiveInterruptButtons(false);
+              state.activeSessionId = null;
               renderReport(parsed);
             } else if (eventType === "error") {
               throw new Error(parsed.error);
@@ -1309,12 +1532,15 @@
         els.verdictHeadline.textContent = "Review failed";
         els.verdictSub.textContent = err.message;
       } finally {
+        setLiveInterruptButtons(false);
+        state.activeSessionId = null;
         els.runBtn.disabled = false;
         els.topRunBtn.disabled = false;
       }
     }
 
     async function runBenchmark() {
+      switchView("inspector");
       els.compareBtn.disabled = true;
       els.compareBtn.textContent = "Running...";
       try {
@@ -1341,10 +1567,102 @@
       }
     }
 
+    function renderBatchSummary() {
+      const summary = state.batchSummary;
+      if (!summary) return;
+
+      let approvedKsh = 0;
+      let heldKsh = 0;
+      for (const item of summary.items) {
+        const dec = state.batchDecisions[item.checkoutId] ?? item.operatorDecision;
+        if (dec === "APPROVED_FOR_RELEASE") {
+          approvedKsh += item.report.ledger.supportedTotalKsh;
+        } else {
+          heldKsh += item.report.ledger.draftTotalKsh;
+        }
+      }
+
+      els.batchLoopsVal.textContent = `${summary.concurrentAgentLoops} loops / ${summary.checkoutCount} checkouts`;
+      els.batchOverlapSub.textContent = `Completed in ${summary.durationMs}ms | All overlaps verified: ${summary.allOverlapsVerified ? "Yes" : "No"}`;
+      els.batchApprovedVal.textContent = fmtKsh(approvedKsh);
+      els.batchHeldVal.textContent = fmtKsh(heldKsh);
+      els.batchCorrectedVal.textContent = fmtKsh(summary.totalMisallocationsCorrectedKsh);
+      els.batchStatusTag.className = "status-tag ok";
+      els.batchStatusTag.textContent = `${summary.autoClearedCount} auto-cleared / ${summary.exceptionCount} exceptions`;
+
+      els.batchBody.innerHTML = summary.items
+        .map((item) => {
+          const dec = state.batchDecisions[item.checkoutId] ?? item.operatorDecision;
+          const v = item.report.verdict;
+          const vTone =
+            v === "READY_FOR_HUMAN_APPROVAL"
+              ? "ok"
+              : v === "CORRECTED_READY_FOR_APPROVAL"
+                ? "warn"
+                : "danger";
+          return `
+            <tr>
+              <td>
+                <strong>${escapeHtml(item.checkoutId)}</strong>
+                <span class="seller-sub">${escapeHtml(item.sellersLabel)}</span>
+              </td>
+              <td style="text-align:right;"><span class="status-tag ${vTone}">${escapeHtml(v)}</span></td>
+              <td>${fmtKsh(item.report.ledger.supportedTotalKsh)}</td>
+              <td>${fmtKsh(item.report.ledger.heldReserveKsh)}</td>
+              <td style="text-align:right;">
+                <div style="display:inline-flex; gap:4px;">
+                  <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "APPROVED_FOR_RELEASE" ? "selected-ok" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="APPROVED_FOR_RELEASE">Approve</button>
+                  <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "HELD_IN_RESERVE" ? "selected-warn" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="HELD_IN_RESERVE">Hold</button>
+                  <button type="button" class="btn btn-ghost btn-sm batch-op ${dec === "REJECTED" ? "selected-danger" : ""}" data-chk="${escapeHtml(item.checkoutId)}" data-dec="REJECTED">Reject</button>
+                </div>
+              </td>
+              <td>
+                <button type="button" class="btn btn-ghost btn-sm batch-inspect" data-scenario="${escapeHtml(item.scenarioId)}">Inspect</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      for (const btn of els.batchBody.querySelectorAll(".batch-op")) {
+        btn.addEventListener("click", () => {
+          state.batchDecisions[btn.dataset.chk] = btn.dataset.dec;
+          renderBatchSummary();
+        });
+      }
+      for (const btn of els.batchBody.querySelectorAll(".batch-inspect")) {
+        btn.addEventListener("click", () => {
+          switchView("inspector");
+          selectScenario(btn.dataset.scenario);
+          runSelected();
+        });
+      }
+    }
+
+    async function runBatchAudit() {
+      els.runBatchBtn.disabled = true;
+      els.batchStatusTag.className = "status-tag sky";
+      els.batchStatusTag.textContent = "running 8 concurrent loops...";
+      try {
+        const res = await fetch("/api/batch");
+        const summary = await res.json();
+        state.batchSummary = summary;
+        state.batchDecisions = {};
+        for (const item of summary.items) {
+          state.batchDecisions[item.checkoutId] = item.operatorDecision;
+        }
+        renderBatchSummary();
+      } finally {
+        els.runBatchBtn.disabled = false;
+      }
+    }
+
     async function init() {
       const res = await fetch("/api/scenarios");
       const data = await res.json();
       state.scenarios = data.scenarios;
+      state.batchCheckouts = data.batchCheckouts || [];
+
       const modeDot = data.mode === "live" ? "ok" : "sky";
       els.modeChip.innerHTML = `<span class="dot ${modeDot}"></span>${escapeHtml(data.mode)}: ${escapeHtml(data.model)}`;
 
@@ -1365,8 +1683,16 @@
         });
       }
 
+      for (const btn of document.querySelectorAll(".view-btn")) {
+        btn.addEventListener("click", () => switchView(btn.dataset.view));
+      }
+
       for (const btn of document.querySelectorAll(".seg-btn")) {
         btn.addEventListener("click", () => setDraftSeller(btn.dataset.seller));
+      }
+
+      for (const btn of document.querySelectorAll(".op-btn")) {
+        btn.addEventListener("click", () => setOperatorDecision(btn.dataset.op));
       }
 
       for (const pill of document.querySelectorAll(".filter-pill")) {
@@ -1395,9 +1721,16 @@
         });
       }
 
+      els.liveCorrBtn.addEventListener("click", () =>
+        sendLiveInterrupt("WAREHOUSE_CORRECTION", "SELLER-A"),
+      );
+      els.liveDisputeBtn.addEventListener("click", () =>
+        sendLiveInterrupt("CHARGEBACK_MATCHING"),
+      );
       els.runBtn.addEventListener("click", runSelected);
       els.topRunBtn.addEventListener("click", runSelected);
       els.compareBtn.addEventListener("click", runBenchmark);
+      els.runBatchBtn.addEventListener("click", runBatchAudit);
       els.downloadBtn.addEventListener("click", () => {
         if (!state.lastBundle) return;
         const blob = new Blob([JSON.stringify(state.lastBundle, null, 2)], {
@@ -1409,7 +1742,7 @@
         a.click();
       });
 
-      selectScenario("case-2-wrong-seller-zerosum");
+      selectScenario("case-4-late-correction-midflight");
       runSelected();
     }
 

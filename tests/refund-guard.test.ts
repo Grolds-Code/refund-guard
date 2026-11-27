@@ -267,4 +267,44 @@ describe("RefundGuard: Concurrent Mozaik Interception Suite", () => {
     expect(guard4.acceptedProposal?.debitSellerId).toBe("SELLER-A");
     expect(guard4.finalEpoch).toBe(2);
   });
+
+  it("Batch Desk: runs 4 distinct checkouts (8 concurrent Mozaik agent loops) and isolates exceptions", async () => {
+    const { runBlackFridayBatch } = await import("../src/engine/run-batch.js");
+    const batch = await runBlackFridayBatch({ modeOverride: "mock", latencyScale: 0.4 });
+
+    expect(batch.checkoutCount).toBe(4);
+    expect(batch.concurrentAgentLoops).toBe(8);
+    expect(batch.allOverlapsVerified).toBe(true);
+    expect(batch.autoClearedCount).toBe(1);
+    expect(batch.exceptionCount).toBe(3);
+
+    const byCheckout = new Map(batch.items.map((i) => [i.checkoutId, i]));
+    expect(byCheckout.get("CHK-518")?.report.verdict).toBe("READY_FOR_HUMAN_APPROVAL");
+    expect(byCheckout.get("CHK-518")?.report.acceptedProposal?.debitSellerId).toBe("SELLER-A");
+    expect(byCheckout.get("CHK-402")?.report.verdict).toBe("CORRECTED_READY_FOR_APPROVAL");
+    expect(byCheckout.get("CHK-402")?.report.acceptedProposal?.debitSellerId).toBe("SELLER-A");
+    expect(byCheckout.get("CHK-629")?.report.verdict).toBe("HOLD_MISSING_EVIDENCE");
+    expect(byCheckout.get("CHK-741")?.report.verdict).toBe("FROZEN_DISPUTE_COLLISION");
+    expect(byCheckout.get("CHK-741")?.report.ledger.blockedUnsafeRefundKsh).toBe(12_000);
+  });
+
+  it("Live interrupt hook: external mid-run injection via onSessionReady interrupts RefundDeskAgent live", async () => {
+    const scenario = getScenarioById("case-1-clean-allocation");
+    const report = await runRefundGuardCase(scenario, {
+      modeOverride: "mock",
+      latencyScale: 0.8,
+      onSessionReady: (injector) => {
+        setTimeout(() => {
+          injector.injectWarehouseCorrection(
+            buildInjectedWarehouseCorrection(scenario, "SELLER-B"),
+          );
+        }, 70);
+      },
+    });
+
+    expect(report.finalEpoch).toBe(2);
+    expect(report.verdict).toBe("CORRECTED_READY_FOR_APPROVAL");
+    expect(report.acceptedProposal?.debitSellerId).toBe("SELLER-B");
+    expect(report.interceptions.some((i) => i.reason === "SUPERSEDED_EVIDENCE")).toBe(true);
+  });
 });
