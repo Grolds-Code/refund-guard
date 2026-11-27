@@ -1,75 +1,78 @@
 {
-  "capturedAt": "2026-11-27T05:19:40.165Z",
+  "capturedAt": "2026-11-27T08:27:10.820Z",
   "mode": "live",
   "modelName": "gpt-4o-mini",
+  "postAcceptanceMode": true,
   "checks": {
     "sentinelPublished": true,
     "deskSubmitted": true,
-    "wrongProposalBlocked": true,
+    "noDuplicateAcceptInAnyEpoch": true,
+    "expiredPriorAcceptance": true,
+    "wrongProposalBlocked": false,
+    "finalEpoch": 2,
+    "supersededProposalCount": 1,
     "finalDebitSellerId": "SELLER-A",
+    "reconciliationMatched": true,
     "concurrentOverlapVerified": true
   },
   "report": {
-    "scenarioId": "case-2-wrong-seller-zerosum",
-    "scenarioTitle": "2. Wrong Seller Allocation (Same KSh 90,000 Total)",
+    "scenarioId": "case-4-late-correction-midflight",
+    "scenarioTitle": "4. Late Warehouse Correction Mid-Flight (Epoch Invalidation)",
     "mode": "live",
     "modelName": "gpt-4o-mini",
     "architecture": "refund-guard-concurrent",
     "verdict": "CORRECTED_READY_FOR_APPROVAL",
-    "finalEpoch": 1,
-    "durationMs": 8149,
+    "finalEpoch": 2,
+    "durationMs": 7310,
     "concurrentOverlapVerified": true,
-    "overlapDetail": "RefundDesk [34ms..8147ms] overlapped DisputeFulfillmentSentinel [37ms..5491ms] for 5454ms",
+    "overlapDetail": "RefundDesk [19ms..5068ms] overlapped DisputeFulfillmentSentinel [22ms..4735ms] for 4713ms",
     "sentinelFinding": {
-      "epoch": 1,
+      "epoch": 2,
+      "checkoutId": "CHK-402",
       "status": "VERIFIED_RETURN",
       "verifiedSellerId": "SELLER-A",
       "verifiedLineId": "LINE-402-A",
       "disputeId": null,
-      "evidenceNoteId": "WH-202",
+      "evidenceNoteId": "WH-404-V2",
       "confidence": "HIGH",
-      "summary": "Parcel contained 1x Navy Quilted Winter Jacket size L from Nairobi Streetwear Co. as per warehouse notes. No ambiguity in the return.",
+      "summary": "Verified return of Navy Quilted Winter Jacket (SKU JKT-NVY-L) from Seller A received at the warehouse. Boots not returned.",
       "citedSourceIds": [
-        "CHK-402",
-        "STL-PAY-402",
-        "WH-202"
+        "WH-404-V2"
       ],
-      "recordedAtMs": 2829
+      "recordedAtMs": 5862
     },
     "disputeEvaluation": null,
     "acceptedProposal": {
-      "epoch": 1,
+      "epoch": 2,
       "checkoutId": "CHK-402",
       "debitSellerId": "SELLER-A",
       "refundAmountKsh": 10000,
-      "rationale": "Sentinel verified return of LINE-402-A belonging to SELLER-A.",
+      "rationale": "Approved refund for returned item as per policy.",
       "citedSourceIds": [
-        "TKT-202",
-        "DRF-202",
+        "TKT-404",
+        "DRF-404",
         "STL-PAY-402",
         "STL-REF-402",
-        "CHK-402",
-        "WH-202"
+        "WH-404-V2"
       ]
     },
-    "supersededProposals": [],
-    "interceptions": [
+    "supersededProposals": [
       {
-        "timestampMs": 4466,
-        "attemptNumber": 2,
-        "blockedSellerId": "SELLER-B",
-        "proposalEpoch": 1,
-        "currentEpoch": 1,
-        "reason": "WRONG_SELLER_ALLOCATION",
-        "detail": "Zero-sum misallocation blocked: draft/proposal charged SELLER-B, but Sentinel verified return of LINE-402-A belonging to SELLER-A (WH-202). Total remains KSh 90,000, but seller deduction must move to SELLER-A.",
-        "actionTaken": "REWRITE_AND_REPLAN",
+        "epoch": 1,
+        "checkoutId": "CHK-402",
+        "debitSellerId": "SELLER-B",
+        "refundAmountKsh": 10000,
+        "rationale": "Customer is returning one item as per the refund policy.",
         "citedSourceIds": [
-          "CHK-402",
+          "TKT-404",
+          "DRF-404",
           "STL-PAY-402",
-          "WH-202"
+          "STL-REF-402",
+          "WH-404-V1"
         ]
       }
     ],
+    "interceptions": [],
     "ledger": {
       "batchId": "BATCH-BF-2026-01",
       "checkoutId": "CHK-402",
@@ -80,8 +83,11 @@
       "draftTotalKsh": 90000,
       "supportedTotalKsh": 90000,
       "totalStillMatchesExactly": true,
+      "reconciliationMatched": true,
+      "reconciliationError": null,
       "misallocationCaughtKsh": 10000,
       "blockedUnsafeRefundKsh": 0,
+      "totalWithheldFromGrossKsh": 10000,
       "heldReserveKsh": 0,
       "holdPolicyExplanation": "Batch total remains KSh 90,000; KSh 10,000 refund deduction reallocated to verified seller SELLER-A.",
       "lines": [
@@ -95,13 +101,12 @@
           "supportedNetPayoutKsh": 50000,
           "deltaKsh": -10000,
           "citations": [
-            "DRF-202",
-            "TKT-202",
+            "DRF-404",
+            "TKT-404",
             "STL-PAY-402",
             "STL-REF-402",
             "LINE-402-A",
-            "CHK-402",
-            "WH-202"
+            "WH-404-V2"
           ]
         },
         {
@@ -114,37 +119,35 @@
           "supportedNetPayoutKsh": 40000,
           "deltaKsh": 10000,
           "citations": [
-            "DRF-202",
-            "TKT-202",
+            "DRF-404",
+            "TKT-404",
             "STL-PAY-402",
             "STL-REF-402",
             "LINE-402-B",
-            "CHK-402",
-            "WH-202"
+            "WH-404-V2"
           ]
         }
       ],
       "allCitations": [
-        "DRF-202",
-        "TKT-202",
+        "DRF-404",
+        "TKT-404",
         "STL-PAY-402",
         "STL-REF-402",
         "LINE-402-A",
-        "CHK-402",
-        "WH-202",
+        "WH-404-V2",
         "LINE-402-B"
       ]
     },
     "timeline": [
       {
         "seq": 1,
-        "elapsedMs": 33,
+        "elapsedMs": 19,
         "type": "case.opened",
         "actor": "OperatorFeed",
         "epoch": 1,
-        "message": "Opened case-2-wrong-seller-zerosum (CHK-402, batch BATCH-BF-2026-01, draft debits SELLER-B, net total KSh 90,000).",
+        "message": "Opened case-4-late-correction-midflight (CHK-402, batch BATCH-BF-2026-01, draft debits SELLER-B, net total KSh 90,000).",
         "data": {
-          "scenarioId": "case-2-wrong-seller-zerosum",
+          "scenarioId": "case-4-late-correction-midflight",
           "mode": "live",
           "model": "gpt-4o-mini",
           "draftDebitedSellerId": "SELLER-B"
@@ -152,11 +155,11 @@
       },
       {
         "seq": 2,
-        "elapsedMs": 34,
+        "elapsedMs": 19,
         "type": "agent.loop_started",
         "actor": "RefundDeskAgent",
         "epoch": 1,
-        "message": "Started concurrent review loop for CHK-402 (ticket TKT-202, draft DRF-202).",
+        "message": "Started concurrent review loop for CHK-402 (ticket TKT-404, draft DRF-404).",
         "data": {
           "epoch": 1,
           "isRevalidation": false
@@ -164,11 +167,11 @@
       },
       {
         "seq": 3,
-        "elapsedMs": 37,
+        "elapsedMs": 22,
         "type": "agent.loop_started",
         "actor": "DisputeFulfillmentSentinel",
         "epoch": 1,
-        "message": "Started concurrent evidence audit loop (epoch 1, note WH-202).",
+        "message": "Started concurrent evidence audit loop (epoch 1, note WH-404-V1).",
         "data": {
           "epoch": 1,
           "trigger": "case.opened"
@@ -176,7 +179,7 @@
       },
       {
         "seq": 4,
-        "elapsedMs": 2043,
+        "elapsedMs": 2321,
         "type": "mozaik.interception_started",
         "actor": "MozaikRuntime",
         "epoch": 1,
@@ -184,93 +187,7 @@
       },
       {
         "seq": 5,
-        "elapsedMs": 2044,
-        "type": "interception.inspecting",
-        "actor": "RefundInterceptionGate",
-        "epoch": 1,
-        "message": "Intercepted propose_refund(debit=SELLER-A, epoch=1) before execution; awaiting Sentinel verification for epoch 1.",
-        "data": {
-          "proposedSeller": "SELLER-A",
-          "proposalEpoch": 1,
-          "currentEpoch": 1
-        }
-      },
-      {
-        "seq": 6,
-        "elapsedMs": 2829,
-        "type": "sentinel.finding",
-        "actor": "DisputeFulfillmentSentinel",
-        "epoch": 1,
-        "message": "[epoch 1] VERIFIED_RETURN -> SELLER-A (LINE-402-A): Parcel contained 1x Navy Quilted Winter Jacket size L from Nairobi Streetwear Co. as per warehouse notes. No ambiguity in the return.",
-        "data": {
-          "epoch": 1,
-          "status": "VERIFIED_RETURN",
-          "verifiedSellerId": "SELLER-A",
-          "disputeId": null,
-          "citedSourceIds": [
-            "CHK-402",
-            "STL-PAY-402",
-            "WH-202"
-          ]
-        }
-      },
-      {
-        "seq": 7,
-        "elapsedMs": 2829,
-        "type": "interception.cleared",
-        "actor": "RefundInterceptionGate",
-        "epoch": 1,
-        "message": "Cleared propose_refund(debit=SELLER-A, epoch=1): matches Sentinel finding (WH-202, LINE-402-A) with zero active linked disputes.",
-        "data": {
-          "approvedSellerId": "SELLER-A",
-          "epoch": 1,
-          "citedSourceIds": [
-            "CHK-402",
-            "STL-PAY-402",
-            "WH-202"
-          ]
-        }
-      },
-      {
-        "seq": 8,
-        "elapsedMs": 2830,
-        "type": "mozaik.interception_finished",
-        "actor": "MozaikRuntime",
-        "epoch": 1,
-        "message": "Mozaik runtime resumed with transition returned by InterceptionHandler."
-      },
-      {
-        "seq": 9,
-        "elapsedMs": 2831,
-        "type": "proposal.accepted",
-        "actor": "RefundDeskAgent",
-        "epoch": 1,
-        "message": "Accepted refund proposal: debit SELLER-A KSh 10,000 (epoch 1, verdict=CORRECTED_READY_FOR_APPROVAL).",
-        "data": {
-          "debitSellerId": "SELLER-A",
-          "epoch": 1,
-          "verdict": "CORRECTED_READY_FOR_APPROVAL",
-          "citedSourceIds": [
-            "TKT-202",
-            "DRF-202",
-            "STL-PAY-402",
-            "STL-REF-402",
-            "CHK-402",
-            "WH-202"
-          ]
-        }
-      },
-      {
-        "seq": 10,
-        "elapsedMs": 4466,
-        "type": "mozaik.interception_started",
-        "actor": "MozaikRuntime",
-        "epoch": 1,
-        "message": "Mozaik runtime paused RefundDeskAgent transition for awaited InterceptionHandler."
-      },
-      {
-        "seq": 11,
-        "elapsedMs": 4466,
+        "elapsedMs": 2322,
         "type": "interception.inspecting",
         "actor": "RefundInterceptionGate",
         "epoch": 1,
@@ -282,115 +199,230 @@
         }
       },
       {
-        "seq": 12,
-        "elapsedMs": 4466,
-        "type": "interception.blocked",
+        "seq": 6,
+        "elapsedMs": 3174,
+        "type": "sentinel.finding",
+        "actor": "DisputeFulfillmentSentinel",
+        "epoch": 1,
+        "message": "[epoch 1] VERIFIED_RETURN -> SELLER-B (LINE-402-B): 1x Tan Leather Chelsea Boots verified returned to warehouse.",
+        "data": {
+          "epoch": 1,
+          "status": "VERIFIED_RETURN",
+          "verifiedSellerId": "SELLER-B",
+          "disputeId": null,
+          "citedSourceIds": [
+            "STL-PAY-402",
+            "STL-REF-402",
+            "WH-404-V1"
+          ]
+        }
+      },
+      {
+        "seq": 7,
+        "elapsedMs": 3175,
+        "type": "interception.cleared",
         "actor": "RefundInterceptionGate",
         "epoch": 1,
-        "message": "[WRONG_SELLER_ALLOCATION] Zero-sum misallocation blocked: draft/proposal charged SELLER-B, but Sentinel verified return of LINE-402-A belonging to SELLER-A (WH-202). Total remains KSh 90,000, but seller deduction must move to SELLER-A.",
+        "message": "Cleared propose_refund(debit=SELLER-B, amount=KSh 10,000, epoch=1): matches Sentinel finding (WH-404-V1, LINE-402-B) with reconciled totals and zero blocking disputes.",
         "data": {
-          "reason": "WRONG_SELLER_ALLOCATION",
-          "actionTaken": "REWRITE_AND_REPLAN",
-          "blockedSellerId": "SELLER-B",
-          "proposalEpoch": 1,
-          "currentEpoch": 1,
+          "approvedSellerId": "SELLER-B",
+          "epoch": 1,
           "citedSourceIds": [
-            "CHK-402",
             "STL-PAY-402",
-            "WH-202"
+            "STL-REF-402",
+            "WH-404-V1"
           ]
+        }
+      },
+      {
+        "seq": 8,
+        "elapsedMs": 3175,
+        "type": "mozaik.interception_finished",
+        "actor": "MozaikRuntime",
+        "epoch": 1,
+        "message": "Mozaik runtime resumed with transition returned by InterceptionHandler."
+      },
+      {
+        "seq": 9,
+        "elapsedMs": 3175,
+        "type": "proposal.accepted",
+        "actor": "RefundDeskAgent",
+        "epoch": 1,
+        "message": "Accepted refund proposal: debit SELLER-B KSh 10,000 (epoch 1, verdict=READY_FOR_HUMAN_APPROVAL).",
+        "data": {
+          "debitSellerId": "SELLER-B",
+          "epoch": 1,
+          "verdict": "READY_FOR_HUMAN_APPROVAL",
+          "citedSourceIds": [
+            "TKT-404",
+            "DRF-404",
+            "STL-PAY-402",
+            "STL-REF-402",
+            "WH-404-V1"
+          ]
+        }
+      },
+      {
+        "seq": 10,
+        "elapsedMs": 3175,
+        "type": "readiness.invalidated",
+        "actor": "RefundGuardState",
+        "epoch": 2,
+        "message": "Prior approval invalidated at epoch 2: warehouse correction WH-404-V2 superseded earlier evidence",
+        "data": {
+          "epoch": 2,
+          "reason": "warehouse correction WH-404-V2 superseded earlier evidence"
+        }
+      },
+      {
+        "seq": 11,
+        "elapsedMs": 3175,
+        "type": "evidence.warehouse_updated",
+        "actor": "WarehouseFeed",
+        "epoch": 2,
+        "message": "Late warehouse correction WH-404-V2 arrived (epoch -> 2): CORRECTION superseding WH-404-V1: Opened the shoebox at QC bench. Inside is actually the Navy Quilted Winter Jacket (SKU JKT-NVY-L, Nairobi Streetwear / Seller A). Customer reused the boot box; boots were NOT returned.",
+        "data": {
+          "noteId": "WH-404-V2",
+          "epoch": 2,
+          "invalidatedPriorApproval": true
+        }
+      },
+      {
+        "seq": 12,
+        "elapsedMs": 3175,
+        "type": "agent.loop_started",
+        "actor": "RefundDeskAgent",
+        "epoch": 2,
+        "message": "Started post-invalidation revalidation loop for CHK-402 (epoch 2).",
+        "data": {
+          "epoch": 2,
+          "isRevalidation": true
         }
       },
       {
         "seq": 13,
-        "elapsedMs": 4467,
-        "type": "mozaik.interception_finished",
-        "actor": "MozaikRuntime",
-        "epoch": 1,
-        "message": "Mozaik runtime resumed with transition returned by InterceptionHandler."
-      },
-      {
-        "seq": 14,
-        "elapsedMs": 5491,
-        "type": "agent.completed",
+        "elapsedMs": 3177,
+        "type": "agent.loop_started",
         "actor": "DisputeFulfillmentSentinel",
-        "epoch": 1,
-        "message": "The verification process has been successfully completed. The finding related to the warehouse return has been published with the status **VERIFIED_RETURN** for the Navy Quilted Winter Jacket from Nairobi Streetwear Co.,"
-      },
-      {
-        "seq": 15,
-        "elapsedMs": 6099,
-        "type": "mozaik.interception_started",
-        "actor": "MozaikRuntime",
-        "epoch": 1,
-        "message": "Mozaik runtime paused RefundDeskAgent transition for awaited InterceptionHandler."
-      },
-      {
-        "seq": 16,
-        "elapsedMs": 6099,
-        "type": "interception.inspecting",
-        "actor": "RefundInterceptionGate",
-        "epoch": 1,
-        "message": "Intercepted propose_refund(debit=SELLER-A, epoch=1) before execution; awaiting Sentinel verification for epoch 1.",
+        "epoch": 2,
+        "message": "Started concurrent evidence audit loop (epoch 2, note WH-404-V2).",
         "data": {
-          "proposedSeller": "SELLER-A",
-          "proposalEpoch": 1,
-          "currentEpoch": 1
+          "epoch": 2,
+          "trigger": "evidence.updated"
         }
       },
       {
-        "seq": 17,
-        "elapsedMs": 6099,
-        "type": "interception.cleared",
+        "seq": 14,
+        "elapsedMs": 4623,
+        "type": "mozaik.interception_started",
+        "actor": "MozaikRuntime",
+        "epoch": 2,
+        "message": "Mozaik runtime paused RefundDeskAgent transition for awaited InterceptionHandler."
+      },
+      {
+        "seq": 15,
+        "elapsedMs": 4623,
+        "type": "interception.inspecting",
         "actor": "RefundInterceptionGate",
-        "epoch": 1,
-        "message": "Cleared propose_refund(debit=SELLER-A, epoch=1): matches Sentinel finding (WH-202, LINE-402-A) with zero active linked disputes.",
+        "epoch": 2,
+        "message": "Intercepted propose_refund(debit=SELLER-A, epoch=2) before execution; awaiting Sentinel verification for epoch 2.",
         "data": {
-          "approvedSellerId": "SELLER-A",
-          "epoch": 1,
+          "proposedSeller": "SELLER-A",
+          "proposalEpoch": 2,
+          "currentEpoch": 2
+        }
+      },
+      {
+        "seq": 16,
+        "elapsedMs": 4735,
+        "type": "agent.completed",
+        "actor": "DisputeFulfillmentSentinel",
+        "epoch": 2,
+        "message": "The finding has been published successfully: 1x Tan Leather Chelsea Boots from Seller B have been verified as returned to the warehouse."
+      },
+      {
+        "seq": 17,
+        "elapsedMs": 5068,
+        "type": "agent.completed",
+        "actor": "RefundDeskAgent",
+        "epoch": 2,
+        "message": "The refund proposal for KSh 10,000 to SELLER-B has been accepted successfully. The action has been processed in compliance with the refund policy regarding the customer's return."
+      },
+      {
+        "seq": 18,
+        "elapsedMs": 5862,
+        "type": "sentinel.finding",
+        "actor": "DisputeFulfillmentSentinel",
+        "epoch": 2,
+        "message": "[epoch 2] VERIFIED_RETURN -> SELLER-A (LINE-402-A): Verified return of Navy Quilted Winter Jacket (SKU JKT-NVY-L) from Seller A received at the warehouse. Boots not returned.",
+        "data": {
+          "epoch": 2,
+          "status": "VERIFIED_RETURN",
+          "verifiedSellerId": "SELLER-A",
+          "disputeId": null,
           "citedSourceIds": [
-            "CHK-402",
-            "STL-PAY-402",
-            "WH-202"
+            "WH-404-V2"
           ]
         }
       },
       {
-        "seq": 18,
-        "elapsedMs": 6099,
-        "type": "mozaik.interception_finished",
-        "actor": "MozaikRuntime",
-        "epoch": 1,
-        "message": "Mozaik runtime resumed with transition returned by InterceptionHandler."
-      },
-      {
         "seq": 19,
-        "elapsedMs": 6099,
-        "type": "proposal.accepted",
-        "actor": "RefundDeskAgent",
-        "epoch": 1,
-        "message": "Accepted refund proposal: debit SELLER-A KSh 10,000 (epoch 1, verdict=CORRECTED_READY_FOR_APPROVAL).",
+        "elapsedMs": 5862,
+        "type": "interception.cleared",
+        "actor": "RefundInterceptionGate",
+        "epoch": 2,
+        "message": "Cleared propose_refund(debit=SELLER-A, amount=KSh 10,000, epoch=2): matches Sentinel finding (WH-404-V2, LINE-402-A) with reconciled totals and zero blocking disputes.",
         "data": {
-          "debitSellerId": "SELLER-A",
-          "epoch": 1,
-          "verdict": "CORRECTED_READY_FOR_APPROVAL",
+          "approvedSellerId": "SELLER-A",
+          "epoch": 2,
           "citedSourceIds": [
-            "TKT-202",
-            "DRF-202",
-            "STL-PAY-402",
-            "STL-REF-402",
-            "CHK-402",
-            "WH-202"
+            "WH-404-V2"
           ]
         }
       },
       {
         "seq": 20,
-        "elapsedMs": 8147,
+        "elapsedMs": 5862,
+        "type": "mozaik.interception_finished",
+        "actor": "MozaikRuntime",
+        "epoch": 2,
+        "message": "Mozaik runtime resumed with transition returned by InterceptionHandler."
+      },
+      {
+        "seq": 21,
+        "elapsedMs": 5862,
+        "type": "proposal.accepted",
+        "actor": "RefundDeskAgent",
+        "epoch": 2,
+        "message": "Accepted refund proposal: debit SELLER-A KSh 10,000 (epoch 2, verdict=CORRECTED_READY_FOR_APPROVAL).",
+        "data": {
+          "debitSellerId": "SELLER-A",
+          "epoch": 2,
+          "verdict": "CORRECTED_READY_FOR_APPROVAL",
+          "citedSourceIds": [
+            "TKT-404",
+            "DRF-404",
+            "STL-PAY-402",
+            "STL-REF-402",
+            "WH-404-V2"
+          ]
+        }
+      },
+      {
+        "seq": 22,
+        "elapsedMs": 7070,
+        "type": "agent.completed",
+        "actor": "DisputeFulfillmentSentinel",
+        "epoch": 2,
+        "message": "The audit has been completed, and the return of the Navy Quilted Winter Jacket from Seller A has been verified. The finding has been published successfully."
+      },
+      {
+        "seq": 23,
+        "elapsedMs": 7309,
         "type": "agent.completed",
         "actor": "RefundDeskAgent",
-        "epoch": 1,
-        "message": "The refund proposal has been successfully submitted for approval. Here are the details:\n\n- **Checkout ID**: CHK-402\n- **Seller**: SELLER-A (Nairobi Streetwear Co.)\n- **Refund Amount**: KSh 10,000\n- **Epoch**: 1\n- **Ratio"
+        "epoch": 2,
+        "message": "The refund proposal for the item returned from checkout CHK-402 has been accepted for SELLER-A, with a refund amount of KSh 10,000. The refund is based on the verified return and complies with the marketplace policy."
       }
     ]
   }
