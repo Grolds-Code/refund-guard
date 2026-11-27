@@ -109,13 +109,25 @@ node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acce
 
 ---
 
-## 4. Live LLM Trace Status (`traces/live-run-trace.json`)
+## 4. Verified Live OpenAI Run (`traces/live-run-trace.json`)
 
-The committed trace at [`traces/live-run-trace.json`](traces/live-run-trace.json) was captured earlier against live OpenAI **`gpt-4o-mini`** on `case-2-wrong-seller-zerosum` (`5,454ms` real concurrent overlap: `RefundDesk [34ms..8147ms]` overlapped `DisputeFulfillmentSentinel [37ms..5491ms]`). Full inspection of that earlier trace showed that the model first proposed and accepted `SELLER-A` at `+2831ms`, then called `propose_refund` again with `SELLER-B` (which `RefundInterceptionGate` blocked at `+4466ms`), and then proposed `SELLER-A` again at `+6099ms`.
+The committed trace at [`traces/live-run-trace.json`](traces/live-run-trace.json) was captured on **27 November 2026** against live OpenAI **`gpt-4o-mini`** (`node --import tsx src/live-trace.ts case-4-late-correction-midflight --post-acceptance`), proving concurrent execution, awaited interception pauses, post-acceptance expiration of an epoch-1 approval, and zero duplicate acceptances:
 
-That observation directly drove two hardened fixes in the current codebase:
-1. `RefundInterceptionGate` and `propose_refund` now block duplicate proposals once an epoch is already accepted (`DUPLICATE_PROPOSAL_BLOCKED`), tested directly in `Audit Fix 4A`.
-2. `src/live-trace.ts` now defaults to `case-4-late-correction-midflight --post-acceptance` and verifies `noDuplicateAcceptInAnyEpoch`, `expiredPriorAcceptance`, `reconciliationMatched`, and `concurrentOverlapVerified`. Re-run `node --import tsx src/live-trace.ts` with a live API key to capture a fresh post-acceptance expiry trace on the latest commit.
+| Timestamp | Epoch | Actor | Observed Event |
+| :--- | :---: | :--- | :--- |
+| `+19ms` / `+22ms` | 1 | `RefundDeskAgent` & `DisputeFulfillmentSentinel` | Both live `gpt-4o-mini` loops start concurrently on `CHK-402` (`DRF-404` / `WH-404-V1`). |
+| `+2321ms` | 1 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-B, epoch=1)` for **853ms** while awaiting Sentinel. |
+| `+3174ms` -> `+3175ms` | 1 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-B (LINE-402-B, WH-404-V1)`; gate clears and epoch 1 accepts `SELLER-B` once. |
+| `+3175ms` | 2 | `WarehouseFeed` -> `RefundGuardState` | Late QC note `WH-404-V2` arrives (`epoch 1 -> 2`), fires `readiness.invalidated`, moves epoch-1 `SELLER-B` into `supersededProposals`, and spawns concurrent epoch-2 loops (`+3175ms` / `+3177ms`). |
+| `+4623ms` | 2 | `RefundInterceptionGate` | Pauses `RefundDeskAgent`'s `propose_refund(SELLER-A, epoch=2)` for **1,239ms** while awaiting Sentinel's epoch-2 audit. |
+| `+5862ms` | 2 | `Sentinel` -> `Gate` -> `RefundDeskAgent` | Sentinel publishes `VERIFIED_RETURN -> SELLER-A (LINE-402-A, WH-404-V2)`; gate verifies reconciliation & fields and accepts `SELLER-A` once (`CORRECTED_READY_FOR_APPROVAL`). |
+
+**Observed checks (reported without omission):**
+- `noDuplicateAcceptInAnyEpoch: true` (each epoch accepted exactly once; duplicate-proposal blocking enforced by gate + tool).
+- `expiredPriorAcceptance: true` (`supersededProposalCount: 1`, `SELLER-B` at epoch 1 superseded by `SELLER-A` at epoch 2).
+- `reconciliationMatched: true` (`A: KSh 50,000 / B: KSh 40,000`, total `KSh 90,000`).
+- `concurrentOverlapVerified: true` (`RefundDesk [19ms..5068ms]` overlapped `DisputeFulfillmentSentinel [22ms..4735ms]` for `4,713ms`).
+- `wrongProposalBlocked: false` (`interceptions: []`) in this specific run because on epoch-2 revalidation `gpt-4o-mini` proposed `SELLER-A` directly while the gate paused both epochs awaiting Sentinel; blocking and rewriting a wrong-seller or stale-epoch tool call is covered deterministically by `Case 2`, `Case 4`, and `Audit Fix 4A-4B` in `npm test`.
 
 ---
 
